@@ -37,7 +37,9 @@ export function buildDdt(raw) {
     unita_misura: clean(x?.unita_misura),
     lotto: clean(x?.lotto),
     data_scadenza: clean(x?.data_scadenza),
-    campi_incerti: [],
+    scadenza_a_fine_mese: x?.scadenza_a_fine_mese === true,
+    // i dubbi di lettura restano finché l'utente non tocca il campo (il frontend li toglie quando lo modifica)
+    campi_incerti: Array.isArray(x?.campi_incerti) ? x.campi_incerti.filter((c) => typeof c === 'string').slice(0, 10) : [],
   }));
   return normalize(DdtSchema.parse({
     fornitore: clean(r.fornitore),
@@ -46,6 +48,7 @@ export function buildDdt(raw) {
     numero_ddt: clean(r.numero_ddt),
     data_ddt: clean(r.data_ddt),
     numero_ordine_cliente: clean(r.numero_ordine_cliente),
+    causale_trasporto: clean(r.causale_trasporto),
     righe,
   }));
 }
@@ -60,6 +63,8 @@ const detail = (row) => ({
   error: row.error,
   created_at: row.created_at,
   file_type: /\.pdf$/i.test(row.stored_path) ? 'pdf' : 'image',
+  pagina: row.pagina || 1, // pagina del file dove inizia questo DDT
+  altri_ddt_del_file: db.findStessoFile(row.file_hash, row.id), // PDF con più DDT: gli altri
   editabile: editabile(row),
   ddt: row.payload,
   // per i documenti ancora modificabili l'esito si ricalcola ad ogni lettura (es. un originale scartato nel frattempo)
@@ -79,7 +84,7 @@ export function createApp() {
       if (!req.file) return res.status(400).json({ error: 'Nessun file ricevuto' });
       const r = await ingest(req.file.path);
       if (!r) return res.status(409).json({ error: 'File già in elaborazione' });
-      res.json(r); // { id, duplicato }
+      res.json(r); // { ids, id, duplicato }
     } catch (e) { next(e); }
   });
 

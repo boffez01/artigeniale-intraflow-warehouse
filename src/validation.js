@@ -15,6 +15,8 @@ export const REGOLE = {
   scadenzaMaxAnni: 10,       // oltre: probabile errore di lettura (es. 2062 invece di 2026)
   scadenzaBreveGiorni: 30,   // sotto: avviso "scadenza ravvicinata"
   umDiscrete: ['PZ', 'CT', 'NR', 'CF'], // unità a pezzi: la quantità DEVE essere intera
+  // P.IVA di Artigeniale: se compare come P.IVA del FORNITORE è quasi sempre un errore di lettura
+  pivaCliente: process.env.PIVA_CLIENTE || '01115770297',
 };
 
 const ISO = /^(\d{4})-(\d{2})-(\d{2})$/;
@@ -40,6 +42,32 @@ export function normalizeDate(s) {
   const yyyy = y.length === 2 ? `20${y}` : y;
   return `${yyyy}-${mo.padStart(2, '0')}-${d.padStart(2, '0')}`;
 }
+
+const ultimoGiorno = (anno, mese) => new Date(Date.UTC(anno, mese, 0)).getUTCDate();
+const meseAnnoInIso = (mese, anno) => {
+  const mo = Number(mese);
+  const y = anno.length === 2 ? 2000 + Number(anno) : Number(anno);
+  if (mo < 1 || mo > 12) return null;
+  return `${y}-${String(mo).padStart(2, '0')}-${String(ultimoGiorno(y, mo)).padStart(2, '0')}`;
+};
+
+/**
+ * Scadenza in ingresso -> { data, fineMese }.
+ * Mese/anno ("4/27", "06/27", "08/2026", "2027-04") => ULTIMO giorno del mese, con fineMese=true
+ * (il giorno è un'assunzione: viene segnalata con un avviso). Date complete: come normalizeDate.
+ */
+export function normalizeScadenza(s) {
+  const t = s == null ? '' : String(s).trim();
+  if (!t) return { data: null, fineMese: false };
+  let m = /^(\d{4})-(\d{1,2})$/.exec(t);
+  if (m) { const d = meseAnnoInIso(m[2], m[1]); return d ? { data: d, fineMese: true } : { data: t, fineMese: false }; }
+  m = /^(\d{1,2})[/.-](\d{4}|\d{2})$/.exec(t);
+  if (m) { const d = meseAnnoInIso(m[1], m[2]); return d ? { data: d, fineMese: true } : { data: t, fineMese: false }; }
+  return { data: normalizeDate(t), fineMese: false };
+}
+
+/** "KG." -> "KG", " pz " -> "PZ" */
+export const normalizeUm = (s) => (s == null ? null : String(s).trim().replace(/\.+$/, '').toUpperCase() || null);
 
 export function normalizeLotto(s) {
   if (s == null) return null;
@@ -69,11 +97,18 @@ export function normalize(ddt) {
     numero_ddt: normalizeNumeroDdt(ddt.numero_ddt),
     numero_ordine_cliente: ddt.numero_ordine_cliente?.trim() || null,
     data_ddt: normalizeDate(ddt.data_ddt),
-    righe: ddt.righe.map((r) => ({
-      ...r,
-      lotto: normalizeLotto(r.lotto),
-      data_scadenza: normalizeDate(r.data_scadenza),
-    })),
+    causale_trasporto: ddt.causale_trasporto?.trim() || null,
+    righe: ddt.righe.map((r) => {
+      const { data, fineMese } = normalizeScadenza(r.data_scadenza);
+      return {
+        ...r,
+        lotto: normalizeLotto(r.lotto),
+        unita_misura: normalizeUm(r.unita_misura),
+        data_scadenza: data,
+        // la marcatura resta se la data è ancora quella già convertita (il frontend la azzera quando l'utente la modifica)
+        scadenza_a_fine_mese: fineMese || (r.scadenza_a_fine_mese === true && ISO.test(data ?? '')),
+      };
+    }),
   };
 }
 
@@ -107,10 +142,13 @@ export function check(ddt, { now = new Date(), duplicato = null, simili = [] } =
 
   // --- Testata
   if (!ddt.numero_ordine_cliente) {
-    errori.push("Numero ordine cliente mancante: impossibile agganciare l'ordine su Giobby");
+    // Non tutti i fornitori riportano il nostro ordine (es. solo la loro conferma): avviso, non blocco.
+    avvisi.push("Numero ordine cliente non trovato: da collegare a mano all'ordine su Giobby");
   }
   if (!ddt.partita_iva_fornitore && !ddt.fornitore) {
     errori.push('Fornitore non identificato (serve P.IVA o ragione sociale)');
+  } else if (ddt.partita_iva_fornitore === REGOLE.pivaCliente) {
+    errori.push(`P.IVA fornitore uguale a quella di Artigeniale (${REGOLE.pivaCliente}): probabile errore di lettura`);
   } else if (ddt.partita_iva_fornitore && !/^\d{11}$/.test(ddt.partita_iva_fornitore)) {
     avvisi.push(`P.IVA fornitore "${ddt.partita_iva_fornitore}" non è di 11 cifre (fornitore estero o errore di lettura)`);
   }
@@ -159,6 +197,7 @@ export function check(ddt, { now = new Date(), duplicato = null, simili = [] } =
           avvisi.push(`${tag}: scadenza oltre ${REGOLE.scadenzaMaxAnni} anni (${r.data_scadenza}): possibile errore di lettura`);
         }
         if (dataDdt && sc < dataDdt) avvisi.push(`${tag}: scadenza precedente alla data del DDT`);
+        if (r.scadenza_a_fine_mese) avvisi.push(`${tag}: scadenza scritta solo mese/anno: assunto l'ULTIMO giorno del mese (${r.data_scadenza})`);
       }
     }
 

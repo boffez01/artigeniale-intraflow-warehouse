@@ -6,21 +6,23 @@ export default function Lista() {
   const [rows, setRows] = useState([]);
   const [err, setErr] = useState('');
   const [busy, setBusy] = useState(false);
+  const [esito, setEsito] = useState(null); // risultato dell'ultimo upload quando il file contiene più DDT
   const fileRef = useRef(null);
 
   const carica = useCallback(() => api.lista().then(setRows).catch((e) => setErr(e.message)), []);
   useEffect(() => {
     carica();
-    const t = setInterval(carica, 5000);
+    const t = setInterval(carica, 5000); // i DDT acquisiti dal watcher compaiono da soli
     return () => clearInterval(t);
   }, [carica]);
 
   async function upload(file) {
     if (!file) return;
-    setBusy(true); setErr('');
+    setBusy(true); setErr(''); setEsito(null);
     try {
       const r = await api.upload(file);
-      window.location.hash = `#/ddt/${r.id}`;
+      if (r.ids.length === 1 && !r.duplicato) window.location.hash = `#/ddt/${r.id}`;
+      else { setEsito(r); carica(); }
     } catch (e) {
       setErr(e.message);
     } finally {
@@ -37,6 +39,12 @@ export default function Lista() {
                onChange={(e) => upload(e.target.files[0])} />
         {busy && <p className="info">Lettura con AI in corso… (qualche secondo)</p>}
         {err && <div className="err">{err}</div>}
+        {esito && (
+          <div className="info">
+            {esito.duplicato ? 'File già acquisito: nessuna nuova lettura.' : `Trovati ${esito.ids.length} DDT nel file (uno per scheda).`}{' '}
+            Apri: {esito.ids.map((id) => <a key={id} href={`#/ddt/${id}`} style={{ marginRight: 8 }}>#{id}</a>)}
+          </div>
+        )}
       </div>
 
       <div className="card">

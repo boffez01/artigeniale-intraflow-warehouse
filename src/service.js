@@ -23,20 +23,23 @@ export function valuta(ddt, id = TUTTI) {
   return { meta, esito };
 }
 
-/** @returns {{id:number, duplicato:boolean}|null} */
+/**
+ * Acquisisce un file: può contenere più DDT, ognuno diventa una scheda.
+ * @returns {{ids:number[], id:number, duplicato:boolean}|null}
+ */
 export async function ingest(filePath) {
   if (!fs.existsSync(filePath)) return null;
 
-  // Idempotenza 1: stessa scansione (stessi byte) già acquisita -> niente Gemini, niente nuova riga.
+  // Idempotenza 1: stessa scansione (stessi byte) già acquisita -> niente Gemini, niente nuove righe.
   const fileHash = sha256(filePath);
   const gia = db.findByHash(fileHash);
-  if (gia) {
+  if (gia.length) {
     fs.rmSync(filePath, { force: true });
-    return { id: gia.id, duplicato: true };
+    return { ids: gia.map((r) => r.id), id: gia[0].id, duplicato: true };
   }
 
   const { name, ext } = path.parse(filePath);
-  const dest = path.join(config.archiveDir, `${name}_${Date.now()}${ext}`);
+  const dest = path.join(config.archiveDir, `${name}_${Date.now()}_${crypto.randomBytes(3).toString('hex')}${ext}`);
   try {
     fs.renameSync(filePath, dest);
   } catch (e) {
@@ -44,30 +47,46 @@ export async function ingest(filePath) {
     throw e;
   }
 
-  let status = 'da_verificare', payload = emptyDdt(), error = null, esito, meta = {};
+  let documenti = [];
+  let errore = null;
   if (!fileCompleto(dest)) {
-    status = 'errore';
-    error = 'File incompleto o corrotto (PDF troncato?): rifai la scansione';
+    errore = 'File incompleto o corrotto (PDF troncato?): rifai la scansione';
   } else {
     try {
-      payload = normalize(await extractor.extractDdt(dest));
-      ({ meta, esito } = valuta(payload));
+      const out = await extractor.extractDdt(dest);
+      documenti = (Array.isArray(out) ? out : [out]).map(normalize);
+      if (!documenti.length) errore = 'Nessun DDT riconosciuto nel file';
     } catch (e) {
-      status = 'errore';
-      error = String(e.message || e);
+      errore = String(e.message || e);
     }
   }
 
+  const base = path.basename(filePath);
+  let ids;
   try {
-    const id = db.insert({ filename: path.basename(filePath), storedPath: dest, status, payload, warnings: esito, error, fileHash, meta });
-    return { id, duplicato: false };
+    // Tutti i DDT del file in UNA transazione: o entrano tutti o nessuno (es. due upload identici in contemporanea).
+    ids = db.tx(() => {
+      if (errore) {
+        return [db.insert({ filename: base, storedPath: dest, status: 'errore', payload: emptyDdt(), error: errore, fileHash, indiceDoc: 0, pagina: 1 })];
+      }
+      return documenti.map((ddt, i) => {
+        const { meta, esito } = valuta(ddt); // vede anche i DDT già inseriti da questo stesso file
+        return db.insert({
+          filename: documenti.length > 1 ? `${base} (DDT ${i + 1}/${documenti.length})` : base,
+          storedPath: dest, status: 'da_verificare', payload: ddt, warnings: esito,
+          fileHash, indiceDoc: i, pagina: ddt.pagina_inizio || 1, meta,
+        });
+      });
+    });
   } catch (e) {
     if (!db.isUnique(e)) throw e;
-    // Un altro processo ha acquisito lo stesso file nel frattempo.
-    const altro = db.findByHash(fileHash);
-    if (!altro) throw e;
-    return { id: altro.id, duplicato: true };
+    // Un altro processo ha acquisito lo stesso file nel frattempo: tengo le sue schede, scarto la mia copia.
+    fs.rmSync(dest, { force: true });
+    const altri = db.findByHash(fileHash);
+    if (!altri.length) throw e;
+    return { ids: altri.map((r) => r.id), id: altri[0].id, duplicato: true };
   }
+  return { ids, id: ids[0], duplicato: false };
 }
 
 /**

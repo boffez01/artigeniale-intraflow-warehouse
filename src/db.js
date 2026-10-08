@@ -17,6 +17,8 @@ CREATE TABLE IF NOT EXISTS ddt (
   chiave_ddt TEXT,           -- fornitore|n°DDT|data: stesso documento scansionato due volte
   numero_ddt TEXT,
   data_ddt TEXT,
+  pagina INTEGER,            -- pagina del file dove inizia questo DDT
+  indice_doc INTEGER,        -- posizione del DDT nel file (0,1,2...): un PDF può contenerne più di uno
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );`);
@@ -26,26 +28,32 @@ const cols = db.prepare('PRAGMA table_info(ddt)').all().map((c) => c.name);
 for (const c of ['file_hash', 'chiave_ddt', 'numero_ddt', 'data_ddt']) {
   if (!cols.includes(c)) db.exec(`ALTER TABLE ddt ADD COLUMN ${c} TEXT`);
 }
+for (const c of ['pagina', 'indice_doc']) {
+  if (!cols.includes(c)) db.exec(`ALTER TABLE ddt ADD COLUMN ${c} INTEGER`);
+}
+db.exec('DROP INDEX IF EXISTS ux_ddt_hash'); // vecchio indice: un file = un DDT
 
 // Vincoli a livello DB: ultima barriera contro i doppi caricamenti, anche con richieste concorrenti.
 db.exec(`
-CREATE UNIQUE INDEX IF NOT EXISTS ux_ddt_hash
-  ON ddt(file_hash) WHERE file_hash IS NOT NULL AND status NOT IN ('scartato','errore');
+CREATE UNIQUE INDEX IF NOT EXISTS ux_ddt_hash_doc
+  ON ddt(file_hash, indice_doc) WHERE file_hash IS NOT NULL AND indice_doc IS NOT NULL AND status NOT IN ('scartato','errore');
 CREATE UNIQUE INDEX IF NOT EXISTS ux_ddt_chiave_inviato
   ON ddt(chiave_ddt) WHERE chiave_ddt IS NOT NULL AND status IN ('in_invio','caricato');
 CREATE INDEX IF NOT EXISTS ix_ddt_numero ON ddt(numero_ddt, data_ddt);`);
 
 const now = () => new Date().toISOString().slice(0, 19);
+/** Esegue fn in una transazione: se qualcosa fallisce (es. indice univoco) non resta nulla a metà. */
+export const tx = (fn) => db.transaction(fn)();
 export const isUnique = (e) => e?.code === 'SQLITE_CONSTRAINT_UNIQUE';
 const VUOTO = { errori: [], avvisi: [] };
 
-export function insert({ filename, storedPath, status, payload, warnings = VUOTO, error = null, fileHash = null, meta = {} }) {
+export function insert({ filename, storedPath, status, payload, warnings = VUOTO, error = null, fileHash = null, indiceDoc = null, pagina = null, meta = {} }) {
   const r = db
-    .prepare(`INSERT INTO ddt(filename,stored_path,status,payload,warnings,error,file_hash,chiave_ddt,numero_ddt,data_ddt,created_at,updated_at)
-              VALUES (@filename,@storedPath,@status,@payload,@warnings,@error,@fileHash,@chiave,@numero,@data,@t,@t)`)
+    .prepare(`INSERT INTO ddt(filename,stored_path,status,payload,warnings,error,file_hash,indice_doc,pagina,chiave_ddt,numero_ddt,data_ddt,created_at,updated_at)
+              VALUES (@filename,@storedPath,@status,@payload,@warnings,@error,@fileHash,@indiceDoc,@pagina,@chiave,@numero,@data,@t,@t)`)
     .run({
       filename, storedPath, status, payload: JSON.stringify(payload), warnings: JSON.stringify(warnings), error,
-      fileHash, chiave: meta.chiave_ddt ?? null, numero: meta.numero_ddt ?? null, data: meta.data_ddt ?? null, t: now(),
+      fileHash, indiceDoc, pagina, chiave: meta.chiave_ddt ?? null, numero: meta.numero_ddt ?? null, data: meta.data_ddt ?? null, t: now(),
     });
   return Number(r.lastInsertRowid);
 }
@@ -67,9 +75,15 @@ export function update(id, fields) {
   db.prepare(`UPDATE ddt SET ${cols} WHERE id=@id`).run({ ...f, id });
 }
 
-/** Stessa scansione (stessi byte) già acquisita e non scartata. */
+/** Stessa scansione (stessi byte) già acquisita: ritorna TUTTI i DDT ricavati da quel file (non scartati). */
 export const findByHash = (hash) =>
-  db.prepare(`SELECT id,status FROM ddt WHERE file_hash=? AND status NOT IN ('scartato','errore') LIMIT 1`).get(hash);
+  db.prepare(`SELECT id,status FROM ddt WHERE file_hash=? AND status NOT IN ('scartato','errore') ORDER BY id`).all(hash);
+
+/** Gli ALTRI DDT ricavati dallo stesso file (PDF multipagina), nell'ordine in cui compaiono. */
+export const findStessoFile = (hash, excludeId) =>
+  hash
+    ? db.prepare(`SELECT id,numero_ddt,status,pagina FROM ddt WHERE file_hash=? AND id<>? ORDER BY indice_doc, id`).all(hash, excludeId)
+    : [];
 
 /** Stesso DDT (stessa chiave) acquisito PRIMA di questo (id minore) e non scartato. */
 export const findDuplicato = (chiave, beforeId) =>
