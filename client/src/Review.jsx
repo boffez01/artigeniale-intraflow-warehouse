@@ -1,5 +1,8 @@
 import { useCallback, useEffect, useState } from 'react';
 import { api } from './api.js';
+import { fmtData } from './format.js';
+import Icon from './Icons.jsx';
+import { ultimaLista } from './nav.js';
 import Tag from './Tag.jsx';
 
 const RIGA_VUOTA = { codice_articolo: '', descrizione: '', quantita: '', unita_misura: '', lotto: '', data_scadenza: '', scadenza_a_fine_mese: false, campi_incerti: [] };
@@ -29,7 +32,7 @@ export default function Review({ id }) {
 
   useEffect(() => { api.dettaglio(id).then(applica).catch((e) => setErr(e.message)); }, [id, applica]);
 
-  if (err && !det) return <div className="err">{err} · <a href="#/">Torna alla lista</a></div>;
+  if (err && !det) return <div className="err">{err} · <a href="#/archivio">Torna all'archivio</a></div>;
   if (!det) return <p>Caricamento…</p>;
 
   const editabile = det.editabile;
@@ -54,14 +57,21 @@ export default function Review({ id }) {
   const scarta = async () => {
     if (!window.confirm('Scartare questo DDT? (es. è un duplicato)')) return;
     setBusy(true);
-    try { await api.scarta(id); window.location.hash = '#/'; } catch (e) { setErr(e.message); setBusy(false); }
+    try { await api.scarta(id); window.location.hash = ultimaLista(); } catch (e) { setErr(e.message); setBusy(false); }
   };
 
   const dubbio = (r, campo) =>
     r.campi_incerti?.includes(campo) || !String(r[campo] ?? '').trim() || (campo === 'data_scadenza' && r.scadenza_a_fine_mese);
   const fileUrl = `/api/ddt/${id}/file`;
+  // il banner "più DDT nel file" conta solo quelli ancora in gioco (gli scartati restano in elenco ma non contano)
+  const altri = det.altri_ddt_del_file || [];
+  const nelFile = altri.filter((a) => a.status !== 'scartato').length + 1;
 
   return (
+    <>
+    <div className="pagehead">
+      <a className="back" href={ultimaLista()}><Icon n="left" size={16} />Archivio DDT</a>
+    </div>
     <div className="split">
       <div className="viewer">
         {det.file_type === 'pdf'
@@ -71,7 +81,13 @@ export default function Review({ id }) {
 
       <div>
         <div className="card">
-          <h3>DDT #{det.id} — {det.filename} <Tag status={det.status} /></h3>
+          <div className="review-title">
+            <div>
+              <h2>{det.ddt.fornitore || 'DDT'} · n° {det.ddt.numero_ddt || '—'}</h2>
+              <p className="muted small">Scheda #{det.id}{det.ddt.data_ddt ? ` · del ${fmtData(det.ddt.data_ddt)}` : ''} · {det.filename}</p>
+            </div>
+            <Tag status={det.status} />
+          </div>
           {det.status === 'caricato' && <div className="ok">Registrato su Giobby · rif. {det.giobby_ref}</div>}
           {det.status === 'in_invio' && <div className="info">Invio a Giobby in corso (o interrotto): non reinviare, controlla prima su Giobby.</div>}
           {det.error && <div className="err">Errore: {det.error}</div>}
@@ -79,10 +95,10 @@ export default function Review({ id }) {
           {esito.errori.map((w, i) => <div className="err" key={`e${i}`}>⛔ {w}</div>)}
           {esito.errori.length > 0 && editabile && <p><b>Correggi gli errori e salva: finché ci sono, il carico su Giobby è bloccato.</b></p>}
           {esito.avvisi.map((w, i) => <div className="warn" key={`w${i}`}>⚠ {w}</div>)}
-          {det.altri_ddt_del_file?.length > 0 && (
+          {altri.length > 0 && (
             <div className="info">
-              Questo file contiene {det.altri_ddt_del_file.length + 1} DDT. Questo parte da pagina {det.pagina}. Altri:{' '}
-              {det.altri_ddt_del_file.map((a) => (
+              Questo file contiene {nelFile} DDT. Questo parte da pagina {det.pagina}. Altri:{' '}
+              {altri.map((a) => (
                 <a key={a.id} href={`#/ddt/${a.id}`} style={{ marginRight: 10 }}>
                   #{a.id}{a.numero_ddt ? ` (n° ${a.numero_ddt}` : ' ('}, p.{a.pagina || 1}{a.status === 'scartato' ? ', scartato' : ''})
                 </a>
@@ -135,5 +151,6 @@ export default function Review({ id }) {
         )}
       </div>
     </div>
+    </>
   );
 }

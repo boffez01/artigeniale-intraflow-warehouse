@@ -53,6 +53,36 @@ export function buildDdt(raw) {
   }));
 }
 
+const STATI = ['da_verificare', 'in_invio', 'caricato', 'errore', 'scartato'];
+const int = (v, def, min, max) => {
+  const n = Number.parseInt(v, 10);
+  return Number.isFinite(n) ? Math.min(max, Math.max(min, n)) : def;
+};
+
+/** Filtri dell'archivio dalla query string: tipi e limiti controllati, valori sconosciuti ignorati. */
+export function filtri(qs = {}) {
+  const s = (v) => (typeof v === 'string' ? v.trim().slice(0, 100) : '');
+  const iso = (v) => (/^\d{4}-\d{2}-\d{2}$/.test(s(v)) ? s(v) : '');
+  return {
+    q: s(qs.q),
+    stati: s(qs.stato).split(',').filter((x) => STATI.includes(x)),
+    fornitore: s(qs.fornitore),
+    da: iso(qs.da),
+    a: iso(qs.a),
+    sort: s(qs.sort),
+    dir: s(qs.dir) === 'asc' ? 'asc' : 'desc',
+    limit: int(qs.limit, 25, 1, 100),
+    offset: int(qs.offset, 0, 0, 1_000_000_000),
+  };
+}
+
+// Cella CSV: virgolette se serve; i valori che iniziano con = + - @ vengono neutralizzati (formula injection in Excel).
+function csvCell(v) {
+  let t = v == null ? '' : String(v);
+  if (/^[=+\-@]/.test(t)) t = `'${t}`;
+  return /[;"\r\n]/.test(t) ? `"${t.replace(/"/g, '""')}"` : t;
+}
+
 const editabile = (row) => ['da_verificare', 'errore'].includes(row.status);
 
 const detail = (row) => ({
@@ -75,9 +105,27 @@ export function createApp() {
   const app = express();
   app.use(express.json({ limit: '1mb' }));
 
-  app.get('/api/ddt', (_req, res) =>
-    res.json(db.listAll().map(({ id, filename, status, created_at, numero_ddt, data_ddt }) =>
-      ({ id, filename, status, created_at, numero_ddt, data_ddt }))));
+  // Stato del sistema per la barra in alto del front office (nessun segreto: solo modalità e se la chiave c'è).
+  app.get('/api/info', (_req, res) =>
+    res.json({ giobby_mode: config.giobbyMode, gemini_pronto: Boolean(config.geminiApiKey), modello: config.geminiModel }));
+
+  // Archivio: ricerca, filtri, ordinamento, paginazione. Tutto validato qui, il browser non decide mai la SQL.
+  app.get('/api/ddt', (req, res) => {
+    const f = filtri(req.query);
+    res.json({ ...db.search(f), counts: db.counts(), fornitori: db.fornitori(), limit: f.limit, offset: f.offset });
+  });
+
+  // Stessi filtri, tutte le righe, CSV con ; e BOM (si apre in Excel italiano senza passaggi).
+  app.get('/api/ddt.csv', (req, res) => {
+    const { items } = db.search({ ...filtri(req.query), limit: 0 });
+    const righe = [['ID', 'Data DDT', 'N° DDT', 'Fornitore', 'N° ordine', 'Righe', 'Stato', 'Errori', 'Avvisi', 'Acquisito (UTC)', 'Rif. Giobby', 'File']];
+    for (const r of items) {
+      righe.push([r.id, r.data_ddt, r.numero_ddt, r.fornitore, r.ordine, r.n_righe, r.status, r.n_errori, r.n_avvisi, r.created_at, r.giobby_ref, r.filename]);
+    }
+    res.type('text/csv; charset=utf-8')
+      .set('Content-Disposition', `attachment; filename="ddt_${new Date().toISOString().slice(0, 10)}.csv"`)
+      .send(`\uFEFF${righe.map((r) => r.map(csvCell).join(';')).join('\r\n')}\r\n`);
+  });
 
   app.post('/api/upload', upload.single('file'), async (req, res, next) => {
     try {

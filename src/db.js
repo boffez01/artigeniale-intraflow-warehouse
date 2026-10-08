@@ -67,6 +67,81 @@ const hydrate = (row) => {
 export const get = (id) => hydrate(db.prepare('SELECT * FROM ddt WHERE id=?').get(id));
 export const listAll = () => db.prepare('SELECT * FROM ddt ORDER BY id DESC LIMIT 200').all();
 
+// ---------------------------------------------------------------- Archivio (lista per il front office)
+// Fornitore, n° righe e controlli si leggono direttamente dal JSON con le funzioni JSON di SQLite:
+// nessuna colonna in più e nessuna migrazione.
+const COLONNE_LISTA = `
+  SELECT id, filename, status, created_at, numero_ddt, data_ddt, giobby_ref, pagina,
+         json_extract(payload,'$.fornitore') AS fornitore,
+         json_extract(payload,'$.numero_ordine_cliente') AS ordine,
+         COALESCE(json_array_length(payload,'$.righe'),0) AS n_righe,
+         COALESCE(json_array_length(warnings,'$.errori'),0) AS n_errori,
+         COALESCE(json_array_length(warnings,'$.avvisi'),0) AS n_avvisi
+  FROM ddt`;
+
+// Whitelist: il nome della colonna di ordinamento non arriva mai dal browser dentro la query.
+const ORDINA_PER = {
+  id: 'id', data: 'data_ddt', numero: 'numero_ddt', fornitore: 'fornitore COLLATE NOCASE',
+  righe: 'n_righe', stato: 'status', controlli: 'n_errori', acquisito: 'created_at',
+};
+const likeEsc = (s) => `%${String(s).replace(/[\\%_]/g, '\\$&')}%`;
+
+function filtroSql({ q = '', stati = [], fornitore = '', da = '', a = '' }) {
+  const where = [];
+  const p = {};
+  if (q) {
+    p.q = likeEsc(q);
+    const L = `LIKE @q ESCAPE '\\'`;
+    const cond = [
+      `filename ${L}`, `numero_ddt ${L}`,
+      `json_extract(payload,'$.fornitore') ${L}`,
+      `json_extract(payload,'$.numero_ordine_cliente') ${L}`,
+      // tracciabilità: si cerca anche per lotto, codice o descrizione articolo
+      `EXISTS (SELECT 1 FROM json_each(payload,'$.righe') r WHERE json_extract(r.value,'$.lotto') ${L}
+               OR json_extract(r.value,'$.codice_articolo') ${L} OR json_extract(r.value,'$.descrizione') ${L})`,
+    ];
+    const m = /^#?(\d{1,9})$/.exec(q.trim());
+    if (m) { cond.push('id = @idq'); p.idq = Number(m[1]); }
+    where.push(`(${cond.join(' OR ')})`);
+  }
+  if (stati.length) {
+    where.push(`status IN (${stati.map((_, i) => `@s${i}`).join(',')})`);
+    stati.forEach((s, i) => { p[`s${i}`] = s; });
+  }
+  if (fornitore) { where.push(`json_extract(payload,'$.fornitore') = @forn`); p.forn = fornitore; }
+  if (da) { where.push('data_ddt >= @da'); p.da = da; }
+  if (a) { where.push('data_ddt <= @a'); p.a = a; }
+  return { sql: where.length ? ` WHERE ${where.join(' AND ')}` : '', p };
+}
+
+/** Lista filtrata, ordinata e paginata. limit=0: tutte le righe (per l'export). */
+export function search({ sort = 'id', dir = 'desc', limit = 25, offset = 0, ...filtri } = {}) {
+  const { sql, p } = filtroSql(filtri);
+  const col = ORDINA_PER[sort] || ORDINA_PER.id;
+  const verso = dir === 'asc' ? 'ASC' : 'DESC';
+  const paging = limit > 0 ? ' LIMIT @limit OFFSET @offset' : '';
+  const items = db
+    .prepare(`${COLONNE_LISTA}${sql} ORDER BY ${col} ${verso}, id DESC${paging}`)
+    .all(limit > 0 ? { ...p, limit, offset } : p);
+  const { n } = db.prepare(`SELECT COUNT(*) AS n FROM ddt${sql}`).get(p);
+  return { items, total: n };
+}
+
+/** Contatori per stato (su tutto l'archivio, indipendenti dai filtri) + acquisiti oggi (ora locale). */
+export function counts() {
+  const per = Object.fromEntries(db.prepare('SELECT status, COUNT(*) AS n FROM ddt GROUP BY status').all().map((r) => [r.status, r.n]));
+  const { n: oggi } = db
+    .prepare(`SELECT COUNT(*) AS n FROM ddt WHERE date(created_at,'localtime') = date('now','localtime') AND status<>'scartato'`)
+    .get();
+  const totale = Object.values(per).reduce((a, b) => a + b, 0);
+  return { per_stato: per, totale, oggi };
+}
+
+/** Fornitori presenti in archivio (per il filtro a tendina). */
+export const fornitori = () =>
+  db.prepare(`SELECT DISTINCT json_extract(payload,'$.fornitore') AS f FROM ddt
+              WHERE json_extract(payload,'$.fornitore') IS NOT NULL ORDER BY f COLLATE NOCASE`).all().map((r) => r.f);
+
 export function update(id, fields) {
   const f = { ...fields, updated_at: now() };
   if (f.payload) f.payload = JSON.stringify(f.payload);

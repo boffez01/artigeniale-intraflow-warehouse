@@ -1,3 +1,4 @@
+// Il backend risponde 422 (validazione) o 502-like con un body JSON che contiene `esito`: non è un errore di rete.
 async function call(url, { method = 'GET', body, form } = {}) {
   const r = await fetch(url, {
     method,
@@ -9,8 +10,17 @@ async function call(url, { method = 'GET', body, form } = {}) {
   return data;
 }
 
+// Query string senza i parametri vuoti
+const qs = (params = {}) => {
+  const p = new URLSearchParams();
+  for (const [k, v] of Object.entries(params)) if (v !== '' && v != null) p.set(k, v);
+  return p.toString();
+};
+
 export const api = {
-  lista: () => call('/api/ddt'),
+  lista: (params) => call(`/api/ddt?${qs(params)}`),
+  csvUrl: (params) => `/api/ddt.csv?${qs(params)}`,
+  info: () => call('/api/info'),
   dettaglio: (id) => call(`/api/ddt/${id}`),
   salva: (id, ddt) => call(`/api/ddt/${id}`, { method: 'PUT', body: ddt }),
   invia: (id, ddt) => call(`/api/ddt/${id}/invia`, { method: 'POST', body: ddt }),
