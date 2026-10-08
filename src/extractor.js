@@ -11,7 +11,7 @@ Leggi il DDT (documento di trasporto) allegato ed estrai i dati richiesti.
 Regole:
 - NON inventare nulla. Se un dato non è presente o non è leggibile, usa null.
 - Lotto e data di scadenza possono essere annotati A MANO sul documento: leggili comunque.
-- Le date vanno in formato ISO YYYY-MM-DD (le date italiane sono GG/MM/AAAA).
+- Le date vanno in formato ISO YYYY-MM-Dnpm install @google/genaiD (le date italiane sono GG/MM/AAAA).
 - Una riga per ogni articolo. Le quantità sono numeri (usa il punto come separatore decimale).
 - Per ogni riga inserisci in 'campi_incerti' i nomi dei campi di cui non sei sicuro
   (es. ["lotto", "data_scadenza"]).
