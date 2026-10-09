@@ -6,7 +6,7 @@ const dataDir = path.resolve(process.env.DATA_DIR || './data');
 
 export const config = {
   geminiApiKey: process.env.GEMINI_API_KEY || '',
-  geminiModel: process.env.GEMINI_MODEL || 'gemini-2.5-flash',
+  geminiModel: process.env.GEMINI_MODEL || 'gemini-3.8-flash',
   port: Number(process.env.PORT || 3000),
   dataDir,
   inboxDir: path.join(dataDir, 'inbox'),       // SOLO la stampante/scanner scrive qui (la guarda il watcher)
