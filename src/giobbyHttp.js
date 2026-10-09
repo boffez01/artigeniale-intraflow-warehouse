@@ -178,9 +178,11 @@ export class GiobbyHttp {
       this.sessione = null;
       return this.richiesta(metodo, percorso, { query, body }, true);
     }
-    if (!res.ok) {
+        if (!res.ok) {
       const motivo = json?.userMessage || json?.developerMessage || troncato(testo, 200);
-      throw new GiobbyError(`Giobby ${metodo} ${percorso}: HTTP ${res.status}${motivo ? ` - ${motivo}` : ''}`, { status: res.status, dettaglio: json ?? troncato(testo, 500) });
+      const allow = res.headers?.get?.('allow'); // sui 405 dice quali metodi accetta quel percorso
+      const dettaglio = json ?? (troncato(testo, 500) || (allow ? { allow } : null));
+      throw new GiobbyError(`Giobby ${metodo} ${percorso}: HTTP ${res.status}${motivo ? ` - ${motivo}` : ''}${allow ? ` (metodi ammessi: ${allow})` : ''}`, { status: res.status, dettaglio });
     }
     return json;
   }

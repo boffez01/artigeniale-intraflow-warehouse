@@ -4,19 +4,21 @@
   "description": "Modulo A - Carico acquisti da DDT (Gemini AI -> Giobby)",
   "type": "module",
   "scripts": {
+    "setup": "npm install && npm --prefix client install",
+    "build": "npm --prefix client run build",
     "start": "node src/server.js",
     "dev": "node --watch src/server.js",
+    "dev:client": "npm --prefix client run dev",
     "watcher": "node src/watcher.js",
     "giobby:test": "node scripts/giobby-test.js",
-    "test": "node --test \"test/*.test.js\""
+    "test": "node --test test/"
   },
   "engines": {
     "node": ">=20"
   },
   "dependencies": {
-    "@google/genai": "^2.28.0",
-    "@google/generative-ai": "^0.24.1",
-    "better-sqlite3": "^11.10.0",
+    "@google/genai": "^2.27.0",
+    "better-sqlite3": "^13.0.3",
     "chokidar": "^5.0.0",
     "dotenv": "^18.0.5",
     "express": "^5.2.1",

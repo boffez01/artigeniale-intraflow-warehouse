@@ -25,6 +25,7 @@ export const config = {
   giobbyUser: process.env.GIOBBY_USER || '',
   giobbyCid: process.env.GIOBBY_CID || '',
   giobbyPassword: process.env.GIOBBY_PASSWORD || '',
+  giobbyStorage: process.env.GIOBBY_STORAGE || 'MB', // magazzino di carico
   giobbyBaseUrl: (process.env.GIOBBY_BASE_URL || '').replace(/\/+$/, ''), // facoltativo: forza l'indirizzo delle API
 };
 

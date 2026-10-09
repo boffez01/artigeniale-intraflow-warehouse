@@ -79,11 +79,54 @@ test('duplicati: bloccante se stesso DDT, avviso se solo stesso numero+data', ()
   assert.equal(check(ddt(), { now: NOW, simili: [{ id: 3 }] }).errori.length, 0);
 });
 
-test('ordine cliente e righe duplicate', () => {
-  assert.match(errori(ddt({}, { numero_ordine_cliente: '  ' })), /ordine cliente/);
+test('ordine cliente mancante: solo AVVISO (non tutti i fornitori lo riportano)', () => {
+  const d = ddt({}, { numero_ordine_cliente: '  ' });
+  assert.equal(d.numero_ordine_cliente, null);
+  assert.deepEqual(check(d, { now: NOW }).errori, []);
+  assert.match(avvisi(d), /ordine cliente non trovato/);
+});
+
+test('righe duplicate', () => {
   const d = ddt({}, { righe: [
     { codice_articolo: 'A1', quantita: 1, lotto: 'L1', data_scadenza: '2027-05-01' },
     { codice_articolo: 'A1', quantita: 2, lotto: 'L1', data_scadenza: '2027-05-01' },
   ] });
   assert.match(avvisi(d), /stesso articolo e lotto/);
+});
+
+test('scadenza solo mese/anno -> ultimo giorno del mese + avviso', () => {
+  const sc = (v) => ddt({ data_scadenza: v }).righe[0];
+  assert.equal(sc('4/27').data_scadenza, '2027-04-30');
+  assert.equal(sc('4/27').scadenza_a_fine_mese, true);
+  assert.equal(sc('06/27').data_scadenza, '2027-06-30');
+  assert.equal(sc('2027-04').data_scadenza, '2027-04-30');
+  assert.equal(sc('2/28').data_scadenza, '2028-02-29');   // 2028 bisestile
+  assert.equal(sc('2/29').data_scadenza, '2029-02-28');
+  assert.equal(sc('2027-05-01').scadenza_a_fine_mese, false);
+  assert.match(avvisi(ddt({ data_scadenza: '4/27' })), /solo mese\/anno.*ULTIMO giorno.*2027-04-30/);
+  assert.deepEqual(check(ddt({ data_scadenza: '4/27' }), { now: NOW }).errori, []);
+  // mese/anno già passato (DDT di febbraio con scadenza 08/2026): bloccato
+  assert.match(errori(ddt({ data_scadenza: '08/2026' })), /GIÀ SCADUTA/);
+});
+
+test('scadenza ambigua o illeggibile: errore, nessuna invenzione', () => {
+  assert.match(errori(ddt({ data_scadenza: '10/20/27' })), /non valida/); // lettura dubbia dal caso reale
+  assert.match(errori(ddt({ data_scadenza: '13/27' })), /non valida/);    // mese 13
+  assert.match(errori(ddt({ data_scadenza: null })), /scadenza mancante/);
+});
+
+test("la marcatura 'fine mese' resta se la data è invariata e cade se cambia", () => {
+  const base = { data_scadenza: '2027-04-30', scadenza_a_fine_mese: true };
+  assert.equal(ddt(base).righe[0].scadenza_a_fine_mese, true);
+  assert.equal(ddt({ data_scadenza: '2027-04-30', scadenza_a_fine_mese: false }).righe[0].scadenza_a_fine_mese, false);
+});
+
+test('unità di misura normalizzata (KG. -> KG)', () => {
+  assert.equal(ddt({ unita_misura: 'KG.' }).righe[0].unita_misura, 'KG');
+  assert.equal(ddt({ unita_misura: ' pz ' }).righe[0].unita_misura, 'PZ');
+});
+
+test('P.IVA del fornitore uguale a quella di Artigeniale = errore di lettura', () => {
+  assert.match(errori(ddt({}, { partita_iva_fornitore: 'IT01115770297' })), /uguale a quella di Artigeniale/);
+  assert.deepEqual(check(ddt(), { now: NOW }).errori, []);
 });

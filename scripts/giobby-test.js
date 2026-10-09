@@ -50,7 +50,7 @@ if (scrittura) {
     if (!/^sb-/i.test(config.giobbyCid || '') && !conferma) {
       throw new Error('Questo account non sembra un sandbox (il cid non inizia con "sb-"). Per scrivere davvero aggiungi --conferma.');
     }
-    const corpo = JSON.parse(fs.readFileSync(fileCorpo, 'utf8'));
+       const corpo = JSON.parse(fs.readFileSync(fileCorpo, 'utf8').replace(/^\uFEFF/, '')); // PowerShell salva i file UTF-8 con un BOM invisibile
     console.log(`\n${metodo} ${percorso}   (corpo: ${fileCorpo})`);
     const risposta = await g.richiesta(metodo, percorso, { body: corpo });
     const testo = JSON.stringify(risposta, null, 2);
