@@ -4,6 +4,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { config } from './config.js';
+import { GiobbyHttp } from './giobbyHttp.js';
 
 class DryRunGiobby {
   async registraCarico(ddt, { chiave } = {}) {
@@ -14,8 +15,11 @@ class DryRunGiobby {
 }
 
 class ApiGiobby {
+  // Login e chiamate HTTP sono pronti (src/giobbyHttp.js, provati con `npm run giobby:test`): this.http.get/post(...)
+  http = new GiobbyHttp();
+
   async registraCarico(_ddt, { chiave } = {}) {
-    // TODO: endpoint, auth (config.giobbyBaseUrl / giobbyToken) e mapping campi reali.
+    // TODO: percorsi e campi reali (Entrata Merci da righe d'ordine, lotti con scadenza, ricerca articolo per codice).
     // - Passare `chiave` come riferimento esterno / chiave di idempotenza, e (se l'API lo permette)
     //   cercare prima il documento con quel riferimento: se la risposta va in timeout dopo che Giobby
     //   ha già registrato, un secondo invio non deve duplicare il carico.
