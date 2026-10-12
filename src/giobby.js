@@ -4,10 +4,12 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { config } from './config.js';
+import { catalogo, conCodiciGiobby, righeDaScegliere, risolviArticoli } from './articoli.js';
 import { adattaEntrataMerci, corpoPerAggiornamento, dataGiobby, oggiIso } from './giobbyCarico.js';
 import { GiobbyError, GiobbyHttp } from './giobbyHttp.js';
 
 class DryRunGiobby {
+  async prodotti() { return null; } // senza collegamento a Giobby non c'è un catalogo con cui abbinare
   async registraCarico(ddt, { chiave } = {}) {
     const ref = `DRY-${new Date().toISOString().replace(/\D/g, '')}-${Math.random().toString(36).slice(2, 6)}`;
     fs.writeFileSync(path.join(config.outboxDir, `${ref}.json`), JSON.stringify({ chiave, ...ddt }, null, 2));
@@ -46,6 +48,11 @@ export class ApiGiobby {
       if (!pagina.length || offset >= (r?.metadata?.totalCount ?? 0)) break;
     }
     return tutti;
+  }
+
+  /** Catalogo articoli di Giobby: [{ id, codice (secondario), descrizione, um }]. */
+  async prodotti() {
+    return catalogo(await this.#elenco('/products', 'products'));
   }
 
   async trovaOrdine(ddt) {
@@ -96,10 +103,16 @@ export class ApiGiobby {
     }
   }
 
-  async registraCarico(ddt, { chiave } = {}) {
-    const numeroDdt = String(ddt.numero_ddt ?? '').trim();
+  async registraCarico(ddtOriginale, { chiave } = {}) {
+    const numeroDdt = String(ddtOriginale.numero_ddt ?? '').trim();
     if (!numeroDdt) throw new Error('Numero DDT mancante');
-    const ordine = await this.trovaOrdine(ddt);
+    const ordine = await this.trovaOrdine(ddtOriginale);
+
+    // codici del fornitore -> codici di Giobby (prima di scrivere qualsiasi cosa)
+    const risoluzioni = risolviArticoli(ddtOriginale.righe, await this.prodotti());
+    const daScegliere = righeDaScegliere(ddtOriginale.righe, risoluzioni);
+    if (daScegliere) throw new Error(daScegliere);
+    const ddt = conCodiciGiobby(ddtOriginale, risoluzioni);
 
     const giaPresenti = await this.#elenco('/purchases/goodsreceipt', 'documentsHeaders');
     let em = giaPresenti.find((d) => String(d.docNumber) === numeroDdt && String(d.idVendor) === String(ordine.idVendor));

@@ -24,6 +24,7 @@ export const api = {
   dettaglio: (id) => call(`/api/ddt/${id}`),
   salva: (id, ddt) => call(`/api/ddt/${id}`, { method: 'PUT', body: ddt }),
   invia: (id, ddt) => call(`/api/ddt/${id}/invia`, { method: 'POST', body: ddt }),
+  abbinamento: (id, ddt) => call(`/api/ddt/${id}/abbinamento`, { method: 'POST', body: ddt }),
   scarta: (id) => call(`/api/ddt/${id}/scarta`, { method: 'POST' }),
   upload: (file) => {
     const form = new FormData();

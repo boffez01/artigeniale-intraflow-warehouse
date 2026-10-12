@@ -5,7 +5,7 @@ import { GiobbyError } from '../src/giobbyHttp.js';
 
 const ordine = (extra = {}) => ({ id: 2, docNumber: '2', docDescription: 'ODA N. 2 del 08/10/26', docStatus: 'CREATED', idVendor: '1', vendorData: { vatcode: '01234567897' }, ...extra });
 const emDoc = () => ({
-  id: 3, docNumber: 'N77/2026', idVendor: '1', idDocumentTypeExt: 0, destIdStorage: '-1', note: '',
+  id: 3, docNumber: 'N77/2026', idVendor: '1', docNumber_: 'x', idDocumentTypeExt: 0, destIdStorage: '-1', note: '',
   rows: [
     { idPos: 1, idMaterial: null, idPosType: 5, description: 'Riferimento a ODA N. 2', quantity: 0 },
     { idPos: 2, idMaterial: 'FAR-002', idPosType: 1, quantity: 50, price: 1.5, idStorage: 'MB' },
@@ -17,6 +17,12 @@ const ddt = (extra = {}) => ({
   righe: [{ codice_articolo: 'FAR-002', quantita: 30, lotto: 'L2610A', data_scadenza: '2027-12-31' }], ...extra,
 });
 
+const PRODOTTI = [
+  { id: 'FAR-001', basicCode: '', description: 'Farina di riso integrale 1 kg', um: 'KG' },
+  { id: 'FAR-002', basicCode: 'FM-MAIS-1', description: 'Farina di mais 1 kg', um: 'KG' },
+  { id: 'FAR-003', basicCode: 'FM-SEMOLA-5', description: 'Semola di grano duro 5 kg', um: 'KG' },
+];
+
 /** Giobby finto: registra le chiamate e risponde come il sandbox. */
 function finto({ ordini = [ordine()], em = [], lotto = 'assente', docEm = emDoc() } = {}) {
   const chiamate = [];
@@ -25,6 +31,7 @@ function finto({ ordini = [ordine()], em = [], lotto = 'assente', docEm = emDoc(
     async get(percorso) {
       chiamate.push(['GET', percorso]);
       if (percorso === '/purchases/orders') return { documentsHeaders: ordini, metadata: { totalCount: ordini.length } };
+      if (percorso === '/products') return { products: PRODOTTI, metadata: { totalCount: PRODOTTI.length } };
       if (percorso === '/purchases/goodsreceipt') return { documentsHeaders: em, metadata: { totalCount: em.length } };
       if (percorso.startsWith('/lots/')) {
         if (lotto === 'assente') throw new GiobbyError('Giobby GET: HTTP 404', { status: 404 });
@@ -93,11 +100,38 @@ test('ordine non trovato, già ricevuto, ambiguo o DDT senza numero d\'ordine: e
   await assert.rejects(client(h).registraCarico(ddt()), /non trovato/);
 });
 
-test('articolo del DDT assente nell\'ordine: errore (mai un carico parziale in silenzio) e EM creata rimossa', async () => {
+test('articolo del DDT che non esiste in Giobby: errore prima di scrivere, nessuna EM creata', async () => {
   const h = finto();
   await assert.rejects(
     client(h).registraCarico(ddt({ righe: [{ codice_articolo: 'FAR-002', quantita: 30 }, { codice_articolo: 'ZZZ-1', quantita: 1 }] })),
-    /ZZZ-1/,
+    /Articoli da abbinare a mano: riga 2 \(ZZZ-1\)/,
+  );
+  assert.equal(h.chiamate.filter((c) => c[0] !== 'GET').length, 0);
+});
+
+test('codice del fornitore = codice secondario: il carico usa il codice primario (anche per il lotto)', async () => {
+  const h = finto();
+  await client(h).registraCarico(ddt({ righe: [{ codice_articolo: 'fm-mais-1', quantita: 30, lotto: 'L2610A', data_scadenza: '2027-12-31' }] }));
+  const put = h.chiamate.find((c) => c[0] === 'PUT');
+  assert.deepEqual(put[2].rows.filter((r) => r.idPosType === 1).map((r) => [r.idMaterial, r.quantity]), [['FAR-002', 30]]);
+  assert.equal(h.chiamate.find((c) => c[1] === '/lots')[2].idMaterial, 'FAR-002');
+});
+
+test('senza codice ma con descrizione identica: abbinata; con scelta dell\'operatore: usata', async () => {
+  let h = finto();
+  await client(h).registraCarico(ddt({ righe: [{ codice_articolo: null, descrizione: '  semola di grano  DURO 5 kg', quantita: 20 }] }));
+  assert.deepEqual(h.chiamate.find((c) => c[0] === 'PUT')[2].rows.filter((r) => r.idPosType === 1).map((r) => r.idMaterial), ['FAR-003']);
+
+  h = finto();
+  await client(h).registraCarico(ddt({ righe: [{ codice_articolo: 'XYZ', descrizione: 'boh', articolo_giobby: 'FAR-002', quantita: 30 }] }));
+  assert.deepEqual(h.chiamate.find((c) => c[0] === 'PUT')[2].rows.filter((r) => r.idPosType === 1).map((r) => r.idMaterial), ['FAR-002']);
+});
+
+test('articolo esistente in Giobby ma non nell\'ordine: errore e EM creata rimossa', async () => {
+  const h = finto();
+  await assert.rejects(
+    client(h).registraCarico(ddt({ righe: [{ codice_articolo: 'FAR-002', quantita: 30 }, { codice_articolo: 'FAR-001', quantita: 1 }] })),
+    /FAR-001/,
   );
   assert.ok(h.chiamate.some((c) => c[0] === 'DELETE'));
   assert.ok(!h.chiamate.some((c) => c[0] === 'PUT'));

@@ -1,11 +1,11 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { api } from './api.js';
 import { fmtData } from './format.js';
 import Icon from './Icons.jsx';
 import { ultimaLista } from './nav.js';
-import Tag from './Tag.jsx';
+import Tag, { Spiega } from './Tag.jsx';
 
-const RIGA_VUOTA = { codice_articolo: '', descrizione: '', quantita: '', unita_misura: '', lotto: '', data_scadenza: '', scadenza_a_fine_mese: false, campi_incerti: [] };
+const RIGA_VUOTA = { codice_articolo: '', descrizione: '', quantita: '', unita_misura: '', lotto: '', data_scadenza: '', articolo_giobby: '', scadenza_a_fine_mese: false, campi_incerti: [] };
 const TESTATA = [
   ['fornitore', 'Fornitore'], ['partita_iva_fornitore', 'P.IVA fornitore'], ['cliente', 'Cliente'],
   ['numero_ddt', 'N° DDT'], ['data_ddt', 'Data DDT (AAAA-MM-GG)'], ['numero_ordine_cliente', 'N° ordine cliente'],
@@ -25,12 +25,26 @@ export default function Review({ id }) {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState('');
   const [dirty, setDirty] = useState(false);
+  const [abb, setAbb] = useState(null); // abbinamento righe <-> articoli di Giobby ({attivo, articoli, righe} o {errore})
 
   const applica = useCallback((d) => {
     setDet(d); setForm(toForm(d.ddt)); setEsito(d.esito); setDirty(false);
   }, []);
 
   useEffect(() => { api.dettaglio(id).then(applica).catch((e) => setErr(e.message)); }, [id, applica]);
+
+  // Abbinamento con gli articoli di Giobby: si aggiorna 0,5 s dopo l'ultima modifica a codici, descrizioni o scelte.
+  const chiaveAbb = useMemo(() => JSON.stringify((form?.righe || []).map((r) => [r.codice_articolo, r.descrizione, r.articolo_giobby])), [form]);
+  const editabileAbb = det?.editabile;
+  useEffect(() => {
+    if (!form || !editabileAbb) return undefined;
+    let vivo = true;
+    const t = setTimeout(() => {
+      api.abbinamento(id, form).then((x) => vivo && setAbb(x)).catch((e) => vivo && setAbb({ errore: e.message }));
+    }, 500);
+    return () => { vivo = false; clearTimeout(t); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [chiaveAbb, editabileAbb, id]);
 
   if (err && !det) return <div className="err">{err} · <a href="#/archivio">Torna all'archivio</a></div>;
   if (!det) return <p>Caricamento…</p>;
@@ -62,6 +76,8 @@ export default function Review({ id }) {
 
   const dubbio = (r, campo) =>
     r.campi_incerti?.includes(campo) || !String(r[campo] ?? '').trim() || (campo === 'data_scadenza' && r.scadenza_a_fine_mese);
+  const abbOk = abb?.attivo ? abb : null;
+  const daScegliere = abbOk ? abbOk.righe.filter((x) => x.stato === 'da_scegliere').length : 0;
   const fileUrl = `/api/ddt/${id}/file`;
   // il banner "più DDT nel file" conta solo quelli ancora in gioco (gli scartati restano in elenco ma non contano)
   const altri = det.altri_ddt_del_file || [];
@@ -121,7 +137,7 @@ export default function Review({ id }) {
 
         <div className="card scroll">
           <table>
-            <thead><tr><th>Codice</th><th>Descrizione</th><th>Q.tà</th><th>UM</th><th>Lotto</th><th>Scadenza</th><th /></tr></thead>
+            <thead><tr><th>Codice</th><th>Descrizione</th><th>Q.tà</th><th>UM</th><th>Lotto</th><th>Scadenza</th>{abbOk && <th>Articolo in Giobby</th>}<th /></tr></thead>
             <tbody>
               {form.righe.map((r, i) => (
                 <tr key={i}>
@@ -132,12 +148,15 @@ export default function Review({ id }) {
                              onChange={(e) => setRiga(i, c, e.target.value)} />
                     </td>
                   ))}
+                  {abbOk && <td className="abb"><Abbinamento x={abbOk.righe[i]} articoli={abbOk.articoli} riga={r} editabile={editabile} onScegli={(v) => setRiga(i, 'articolo_giobby', v)} /></td>}
                   <td>{editabile && <button className="mini" title="Rimuovi riga"
                         onClick={() => set({ righe: form.righe.filter((_, k) => k !== i) })}>✕</button>}</td>
                 </tr>
               ))}
             </tbody>
           </table>
+          {abb?.errore && <p className="muted small">Abbinamento agli articoli di Giobby non disponibile: {abb.errore}</p>}
+          {daScegliere > 0 && <div className="warn">⚠ {daScegliere === 1 ? '1 riga non è stata riconosciuta' : `${daScegliere} righe non sono state riconosciute`}: scegli a quale articolo di Giobby corrisponde nella colonna «Articolo in Giobby». Finché non lo fai il carico è bloccato.</div>}
           {editabile && <button className="sec" style={{ marginTop: 10 }}
             onClick={() => set({ righe: [...form.righe, { ...RIGA_VUOTA }] })}>+ Aggiungi riga</button>}
         </div>
@@ -145,12 +164,39 @@ export default function Review({ id }) {
         {editabile && (
           <div className="actions">
             <button className="sec" disabled={busy} onClick={salva}>Salva modifiche</button>
-            <button disabled={busy} onClick={invia}>Conferma e carica su Giobby</button>
+            <button disabled={busy || daScegliere > 0} onClick={invia}>Conferma e carica su Giobby</button>
             <button className="del" disabled={busy} onClick={scarta}>Scarta (duplicato / errato)</button>
           </div>
         )}
       </div>
     </div>
     </>
+  );
+}
+
+const SPIEGA_METODO = {
+  scelta: 'Hai scelto tu questo articolo.',
+  codice: 'Il codice del DDT coincide con il «Codice secondario» (codice del fornitore) di questo articolo in Giobby.',
+  codice_primario: 'Il codice del DDT coincide con il codice dell\'articolo in Giobby.',
+  descrizione: 'Il codice non è stato trovato, ma la descrizione è identica a quella di questo articolo in Giobby. Controlla che sia davvero lui.',
+};
+
+/** Cella "Articolo in Giobby": riconosciuto (con spiegazione) oppure menu per sceglierlo a mano. */
+function Abbinamento({ x, articoli, riga, editabile, onScegli }) {
+  if (!x || x.stato === 'vuota') return <span className="muted">—</span>;
+  const menu = (
+    <select value={riga.articolo_giobby || ''} disabled={!editabile} className={x.stato === 'da_scegliere' ? 'dubbio' : ''} onChange={(e) => onScegli(e.target.value)}>
+      <option value="">— scegli l'articolo —</option>
+      {articoli.map((a) => <option key={a.id} value={a.id}>{a.id} · {a.descrizione}{a.codice ? ` (${a.codice})` : ''}</option>)}
+    </select>
+  );
+  if (x.stato === 'da_scegliere') {
+    return <Spiega titolo="Articolo non riconosciuto" testo={`${x.motivo}. Scegli a quale articolo di Giobby corrisponde questa riga.`}>{menu}</Spiega>;
+  }
+  if (x.metodo === 'scelta') return menu;
+  return (
+    <Spiega titolo="Articolo riconosciuto" testo={SPIEGA_METODO[x.metodo]}>
+      <span className={`chk ${x.metodo === 'descrizione' ? 'warn' : 'ok'}`}>{x.id} · {x.descrizioneGiobby}</span>
+    </Spiega>
   );
 }

@@ -11,7 +11,7 @@
     "dev:client": "npm --prefix client run dev",
     "watcher": "node src/watcher.js",
     "giobby:test": "node scripts/giobby-test.js",
-    "test": "node --test test/"
+    "test": "node scripts/run-tests.js"
   },
   "engines": {
     "node": ">=20"

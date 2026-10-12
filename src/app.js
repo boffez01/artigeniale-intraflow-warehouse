@@ -10,6 +10,8 @@ import * as db from './db.js';
 import { confermaEInvia, ingest, salva, scarta, valuta } from './service.js';
 import { normalize } from './validation.js';
 import { DdtSchema } from './schemas.js';
+import { risolviArticoli } from './articoli.js';
+import { getGiobbyClient } from './giobby.js';
 
 // Cartella SEPARATA da quella del watcher: altrimenti watcher e web acquisirebbero lo stesso file due volte.
 const upload = multer({
@@ -37,6 +39,7 @@ export function buildDdt(raw) {
     unita_misura: clean(x?.unita_misura),
     lotto: clean(x?.lotto),
     data_scadenza: clean(x?.data_scadenza),
+    articolo_giobby: clean(x?.articolo_giobby),
     scadenza_a_fine_mese: x?.scadenza_a_fine_mese === true,
     // i dubbi di lettura restano finché l'utente non tocca il campo (il frontend li toglie quando lo modifica)
     campi_incerti: Array.isArray(x?.campi_incerti) ? x.campi_incerti.filter((c) => typeof c === 'string').slice(0, 10) : [],
@@ -151,6 +154,16 @@ export function createApp() {
     if (!editabile(row)) return res.status(409).json({ error: 'DDT non più modificabile' });
     salva(row, buildDdt(req.body));
     res.json(detail(db.get(row.id)));
+  });
+
+  // Come verrebbero abbinate le righe agli articoli di Giobby (sul contenuto attuale della scheda, anche non salvato).
+  app.post('/api/ddt/:id/abbinamento', load, async (req, res, next) => {
+    try {
+      const ddt = buildDdt(req.body);
+      const articoli = await getGiobbyClient().prodotti();
+      if (!articoli) return res.json({ attivo: false });
+      res.json({ attivo: true, articoli, righe: risolviArticoli(ddt.righe, articoli) });
+    } catch (e) { res.status(502).json({ error: `Giobby non raggiungibile: ${e.message || e}` }); }
   });
 
   app.post('/api/ddt/:id/invia', load, async (req, res, next) => {

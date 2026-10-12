@@ -9,8 +9,8 @@ const DEF = { q: '', stato: '', fornitore: '', da: '', a: '', sort: 'id', dir: '
 const LIMITI = [10, 25, 50, 100];
 // [chiave di ordinamento (null = non ordinabile), titolo]
 const COLONNE = [
-  ['id', '#'], ['data', 'Data DDT'], ['numero', 'N° DDT'], ['fornitore', 'Fornitore'], [null, 'Ordine'],
-  ['righe', 'Righe'], ['controlli', 'Controlli'], ['stato', 'Stato'], ['acquisito', 'Acquisito'],
+  ['id', '#'], ['data', 'Data DDT'], ['numero', 'N° DDT'], ['fornitore', 'Fornitore'], [null, 'N° ordine'],
+  ['righe', 'N° articoli'], ['controlli', 'Stato controlli'], ['stato', 'Stato'], ['acquisito', 'Acquisito'],
 ];
 const DESC_PER_DEFAULT = new Set(['id', 'data', 'righe', 'controlli', 'acquisito']);
 

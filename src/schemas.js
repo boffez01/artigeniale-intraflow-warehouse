@@ -9,6 +9,7 @@ export const RigaSchema = z.object({
   unita_misura: txt(),
   lotto: txt(),
   data_scadenza: txt(), // ISO AAAA-MM-GG (o AAAA-MM / MM/AAAA in ingresso: la normalizzazione la porta a fine mese)
+  articolo_giobby: txt(), // scelta dell'operatore: id (codice primario) dell'articolo di Giobby
   scadenza_a_fine_mese: z.boolean().nullish().transform((v) => v ?? false), // scritta solo mese/anno: giorno assunto
   campi_incerti: z.array(z.string()).nullish().transform((v) => v ?? []),
 });
