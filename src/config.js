@@ -25,6 +25,8 @@ export const config = {
   giobbyUser: process.env.GIOBBY_USER || '',
   giobbyCid: process.env.GIOBBY_CID || '',
   giobbyPassword: process.env.GIOBBY_PASSWORD || '',
+  // Interruttore del Modulo B (picking): off = non si vede e le sue API rispondono 404; on = attivo
+  moduloB: ['on', 'true', '1', 'si'].includes(String(process.env.MODULO_B || '').trim().toLowerCase()),
   giobbyStorage: process.env.GIOBBY_STORAGE || 'MB', // magazzino di carico
   giobbyBaseUrl: (process.env.GIOBBY_BASE_URL || '').replace(/\/+$/, ''), // facoltativo: forza l'indirizzo delle API
 };

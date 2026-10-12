@@ -12,6 +12,7 @@ import { normalize } from './validation.js';
 import { DdtSchema } from './schemas.js';
 import { risolviArticoli } from './articoli.js';
 import { getGiobbyClient } from './giobby.js';
+import { pickingRouter } from './pickingApi.js';
 
 // Cartella SEPARATA da quella del watcher: altrimenti watcher e web acquisirebbero lo stesso file due volte.
 const upload = multer({
@@ -110,7 +111,11 @@ export function createApp() {
 
   // Stato del sistema per la barra in alto del front office (nessun segreto: solo modalità e se la chiave c'è).
   app.get('/api/info', (_req, res) =>
-    res.json({ giobby_mode: config.giobbyMode, gemini_pronto: Boolean(config.geminiApiKey), modello: config.geminiModel }));
+    res.json({ giobby_mode: config.giobbyMode, gemini_pronto: Boolean(config.geminiApiKey), modello: config.geminiModel, modulo_b: config.moduloB }));
+
+  // Modulo B (picking): visibile solo con MODULO_B=on nel .env
+  if (config.moduloB) app.use('/api/picking', pickingRouter());
+  else app.use('/api/picking', (_req, res) => res.status(404).json({ error: 'Modulo B non attivo' }));
 
   // Archivio: ricerca, filtri, ordinamento, paginazione. Tutto validato qui, il browser non decide mai la SQL.
   app.get('/api/ddt', (req, res) => {

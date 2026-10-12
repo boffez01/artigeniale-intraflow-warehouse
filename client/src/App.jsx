@@ -3,6 +3,7 @@ import { api } from './api.js';
 import Archivio from './Archivio.jsx';
 import Home from './Home.jsx';
 import Icon from './Icons.jsx';
+import Picking from './Picking.jsx';
 import Review from './Review.jsx';
 
 // Router minimale a hash (#/, #/archivio?stato=errore, #/ddt/12): nessuna dipendenza e nessun fallback da configurare sul server.
@@ -22,6 +23,7 @@ function route(hash) {
   const m = /^\/ddt\/(\d+)/.exec(path);
   if (m) return { name: 'ddt', id: Number(m[1]) };
   if (path.startsWith('/archivio')) return { name: 'archivio', query };
+  if (path.startsWith('/picking')) return { name: 'picking' };
   return { name: 'home' };
 }
 
@@ -58,7 +60,9 @@ export default function App() {
           <nav>
             <a className={r.name === 'home' ? 'on' : ''} href="#/"><Icon n="home" size={17} /><span>Home</span></a>
             <a className={r.name === 'archivio' || r.name === 'ddt' ? 'on' : ''} href="#/archivio"><Icon n="list" size={17} /><span>Archivio DDT</span></a>
-            <span className="soon" title="Modulo B: ottimizzazione picking ed emissione DDT in uscita"><Icon n="package" size={17} /><span>Picking</span><em>presto</em></span>
+            {info?.modulo_b
+              ? <a className={r.name === 'picking' ? 'on' : ''} href="#/picking"><Icon n="package" size={17} /><span>Picking</span></a>
+              : <span className="soon" title="Modulo B: ottimizzazione picking ed emissione DDT in uscita"><Icon n="package" size={17} /><span>Picking</span><em>presto</em></span>}
           </nav>
           <Stato info={info} />
         </div>
@@ -67,6 +71,7 @@ export default function App() {
       <main className={r.name === 'ddt' ? 'wide' : ''}>
         {r.name === 'ddt' && <Review key={r.id} id={r.id} />}
         {r.name === 'archivio' && <Archivio key={n} query={r.query} />}
+        {r.name === 'picking' && (info?.modulo_b ? <Picking /> : <p className="muted">Modulo non ancora attivo.</p>)}
         {r.name === 'home' && <Home info={info} />}
       </main>
 
