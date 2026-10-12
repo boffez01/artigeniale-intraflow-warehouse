@@ -121,9 +121,9 @@ export function createApp() {
   // Stessi filtri, tutte le righe, CSV con ; e BOM (si apre in Excel italiano senza passaggi).
   app.get('/api/ddt.csv', (req, res) => {
     const { items } = db.search({ ...filtri(req.query), limit: 0 });
-    const righe = [['ID', 'Data DDT', 'N° DDT', 'Fornitore', 'N° ordine', 'Righe', 'Stato', 'Errori', 'Avvisi', 'Acquisito (UTC)', 'Rif. Giobby', 'File']];
+    const righe = [['ID', 'Data DDT', 'N° DDT', 'Fornitore', 'N° ordine', 'Righe', 'Totale articoli', 'Stato', 'Errori', 'Avvisi', 'Acquisito (UTC)', 'Rif. Giobby', 'File']];
     for (const r of items) {
-      righe.push([r.id, r.data_ddt, r.numero_ddt, r.fornitore, r.ordine, r.n_righe, r.status, r.n_errori, r.n_avvisi, r.created_at, r.giobby_ref, r.filename]);
+      righe.push([r.id, r.data_ddt, r.numero_ddt, r.fornitore, r.ordine, r.n_righe, r.tot_articoli, r.status, r.n_errori, r.n_avvisi, r.created_at, r.giobby_ref, r.filename]);
     }
     res.type('text/csv; charset=utf-8')
       .set('Content-Disposition', `attachment; filename="ddt_${new Date().toISOString().slice(0, 10)}.csv"`)

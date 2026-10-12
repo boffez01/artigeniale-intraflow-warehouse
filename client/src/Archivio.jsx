@@ -3,14 +3,21 @@ import { api } from './api.js';
 import { fmtData, fmtOra } from './format.js';
 import Icon from './Icons.jsx';
 import { ricordaLista } from './nav.js';
-import Tag, { Controlli, STATO } from './Tag.jsx';
+import Tag, { Controlli, Spiega, STATO } from './Tag.jsx';
 
 const DEF = { q: '', stato: '', fornitore: '', da: '', a: '', sort: 'id', dir: 'desc', limit: 25, page: 0 };
 const LIMITI = [10, 25, 50, 100];
-// [chiave di ordinamento (null = non ordinabile), titolo]
+// [chiave di ordinamento (null = non ordinabile), titolo, spiegazione al passaggio del mouse]
 const COLONNE = [
-  ['id', '#'], ['data', 'Data DDT'], ['numero', 'N° DDT'], ['fornitore', 'Fornitore'], [null, 'N° ordine'],
-  ['righe', 'N° articoli'], ['controlli', 'Stato controlli'], ['stato', 'Stato'], ['acquisito', 'Acquisito'],
+  ['id', '#', 'Numero della scheda: lo assegna il programma quando carichi il DDT.'],
+  ['data', 'Data DDT', 'La data scritta sul documento di trasporto del fornitore.'],
+  ['numero', 'N° DDT', 'Il numero del documento di trasporto, come l\'ha scritto il fornitore.'],
+  ['fornitore', 'Fornitore', 'Chi ha mandato la merce. Sotto al nome c\'è il file scansionato.'],
+  [null, 'N° ordine', 'Il numero del vostro ordine d\'acquisto a cui si riferisce il DDT. Serve per agganciare il carico all\'ordine su Giobby.'],
+  ['righe', 'Totale articoli', 'Somma delle quantità di tutte le righe del DDT. Passando sul numero vedi quante righe ha.'],
+  ['controlli', 'Stato controlli', 'Cosa ha controllato il programma prima del carico. Verde: pronto. Giallo: avvisi da guardare. Rosso: errori da correggere, il carico resta bloccato.'],
+  ['stato', 'Stato', 'A che punto è il DDT: da verificare, caricato su Giobby, in errore o scartato. Passa sul badge colorato per sapere cosa fare.'],
+  ['acquisito', 'Acquisito', 'Quando il programma ha ricevuto il file.'],
 ];
 const DESC_PER_DEFAULT = new Set(['id', 'data', 'righe', 'controlli', 'acquisito']);
 
@@ -148,10 +155,10 @@ export default function Archivio({ query }) {
           <table className="list">
             <thead>
               <tr>
-                {COLONNE.map(([k, titolo]) => (
+                {COLONNE.map(([k, titolo, info]) => (
                   <th key={titolo} className={k ? 'sortable' : ''} onClick={k ? () => ordina(k) : undefined}
                       aria-sort={k && f.sort === k ? (f.dir === 'asc' ? 'ascending' : 'descending') : undefined}>
-                    {titolo}{k && f.sort === k && <span className="sort">{f.dir === 'asc' ? '▲' : '▼'}</span>}
+                    <Spiega titolo={titolo} testo={info}>{titolo}</Spiega>{k && f.sort === k && <span className="sort">{f.dir === 'asc' ? '▲' : '▼'}</span>}
                   </th>
                 ))}
                 <th />
@@ -166,7 +173,7 @@ export default function Archivio({ query }) {
                   <td><b>{r.numero_ddt || '—'}</b></td>
                   <td className="forn"><span>{r.fornitore || <span className="muted">Non letto</span>}</span><div className="sub" title={r.filename}>{r.filename}</div></td>
                   <td>{r.ordine || <span className="muted">—</span>}</td>
-                  <td className="num">{r.n_righe || <span className="muted">—</span>}</td>
+                  <td className="num" title={`${r.n_righe} ${r.n_righe === 1 ? 'riga' : 'righe'} nel DDT`}>{r.tot_articoli ? Number(r.tot_articoli.toFixed(3)).toLocaleString('it-IT') : <span className="muted">—</span>}</td>
                   <td><Controlli r={r} /></td>
                   <td><Tag status={r.status} /></td>
                   <td className="muted nowrap">{fmtOra(r.created_at)}</td>

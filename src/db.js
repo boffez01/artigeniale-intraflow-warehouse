@@ -75,6 +75,7 @@ const COLONNE_LISTA = `
          json_extract(payload,'$.fornitore') AS fornitore,
          json_extract(payload,'$.numero_ordine_cliente') AS ordine,
          COALESCE(json_array_length(payload,'$.righe'),0) AS n_righe,
+         COALESCE((SELECT SUM(json_extract(r.value,'$.quantita')) FROM json_each(payload,'$.righe') r),0) AS tot_articoli,
          COALESCE(json_array_length(warnings,'$.errori'),0) AS n_errori,
          COALESCE(json_array_length(warnings,'$.avvisi'),0) AS n_avvisi
   FROM ddt`;
@@ -82,7 +83,7 @@ const COLONNE_LISTA = `
 // Whitelist: il nome della colonna di ordinamento non arriva mai dal browser dentro la query.
 const ORDINA_PER = {
   id: 'id', data: 'data_ddt', numero: 'numero_ddt', fornitore: 'fornitore COLLATE NOCASE',
-  righe: 'n_righe', stato: 'status', controlli: 'n_errori', acquisito: 'created_at',
+  righe: 'tot_articoli', stato: 'status', controlli: 'n_errori', acquisito: 'created_at',
 };
 const likeEsc = (s) => `%${String(s).replace(/[\\%_]/g, '\\$&')}%`;
 

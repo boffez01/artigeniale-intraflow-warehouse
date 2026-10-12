@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 
 process.env.DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'ddt-w-'));
+process.env.GIOBBY_MODE = 'dryrun'; // i test non toccano mai Giobby, qualunque cosa ci sia nel .env
 const { startWatcher } = await import('../src/watcher.js');
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 

@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 
 process.env.DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'ddt-arch-'));
+process.env.GIOBBY_MODE = 'dryrun'; // i test non toccano mai Giobby, qualunque cosa ci sia nel .env
 const { extractor } = await import('../src/extractor.js');
 const { createApp, filtri } = await import('../src/app.js');
 const { DdtSchema } = await import('../src/schemas.js');
@@ -86,7 +87,7 @@ test('archivio: ricerca, filtri, ordinamento, paginazione, contatori, CSV', asyn
   assert.ok(csv.startsWith('ID;Data DDT;N° DDT;Fornitore'));
   const righe = csv.trim().split('\r\n');
   assert.equal(righe.length, 1 + 3, 'intestazione + 3 DDT da verificare (il #3 è scartato)');
-  assert.ok(righe[1].startsWith('1;2026-02-10;10;Alfa Srl;OC-1;1;da_verificare;'));
+  assert.ok(righe[1].startsWith('1;2026-02-10;10;Alfa Srl;OC-1;1;10;da_verificare;'));
   assert.ok(righe[3].includes(";'=SOMMA(1);"), 'un valore che inizia con = non viene eseguito da Excel');
 
   // info di sistema: nessun segreto

@@ -8,6 +8,7 @@ const iso = (days) => new Date(Date.now() + days * 86_400_000).toISOString().sli
 const D1 = iso(200), D2 = iso(260), DDT_DATA = iso(-4);
 
 process.env.DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'ddt-'));
+process.env.GIOBBY_MODE = 'dryrun'; // i test non toccano mai Giobby, qualunque cosa ci sia nel .env
 const { config } = await import('../src/config.js');
 const { extractor } = await import('../src/extractor.js');
 const { createApp } = await import('../src/app.js');
