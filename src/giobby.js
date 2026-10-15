@@ -15,6 +15,12 @@ class DryRunGiobby {
     fs.writeFileSync(path.join(config.outboxDir, `${ref}.json`), JSON.stringify({ chiave, ...ddt }, null, 2));
     return ref;
   }
+  /** Modifica di un DDT già caricato: in simulazione scrive la nuova versione in outbox, il riferimento resta lo stesso. */
+  async aggiornaCarico(ddt, { riferimento } = {}) {
+    const nome = `${riferimento || 'DRY'}.agg-${new Date().toISOString().replace(/\D/g, '')}.json`.replace(/[^\w.-]/g, '_');
+    fs.writeFileSync(path.join(config.outboxDir, nome), JSON.stringify({ aggiornamento: riferimento, ...ddt }, null, 2));
+    return { riferimento: riferimento || null, avvisi: [] };
+  }
 }
 
 const STATI_ORDINE_APERTO = ['CREATED', 'GOOD_PARTIAL_RECEIVED'];
@@ -73,7 +79,9 @@ export class ApiGiobby {
     return ordine;
   }
 
+  /** Crea i lotti che non esistono. Ritorna gli avvisi (es. lotto già in Giobby con una scadenza diversa da quella del DDT). */
   async #assicuraLotti(righeDdt, ddt) {
+    const avvisi = [];
     for (const r of righeDdt) {
       const lotto = String(r.lotto ?? '').trim();
       if (!lotto || !r.codice_articolo) continue;
@@ -89,6 +97,11 @@ export class ApiGiobby {
         if (articolo && String(articolo).toUpperCase() !== String(r.codice_articolo).trim().toUpperCase()) {
           throw new Error(`Il lotto ${lotto} esiste già in Giobby per un altro articolo (${articolo}): non lo riuso`);
         }
+        const scadenzaGiobby = Number(esistente.expireDate);
+        const scadenzaDdt = dataGiobby(r.data_scadenza);
+        if (Number.isFinite(scadenzaGiobby) && scadenzaDdt != null && scadenzaGiobby !== scadenzaDdt) {
+          avvisi.push(`Il lotto ${lotto} esiste già in Giobby con una scadenza diversa da quella del DDT: la scadenza del lotto non è stata cambiata (correggila in Giobby)`);
+        }
         continue;
       }
       const scadenza = dataGiobby(r.data_scadenza);
@@ -101,6 +114,7 @@ export class ApiGiobby {
         reference: ddt.fornitore || '',
       });
     }
+    return avvisi;
   }
 
   async registraCarico(ddtOriginale, { chiave } = {}) {
@@ -146,6 +160,62 @@ export class ApiGiobby {
       }
       throw e;
     }
+  }
+
+  /**
+   * Modifica di un DDT GIÀ caricato: riscrive l'Entrata Merci esistente (stesso id) con i dati corretti del DDT.
+   *  - l'EM si ritrova dal riferimento salvato al carico ("... Giobby id 12 ...") o, in mancanza, dal vecchio numero DDT
+   *  - quantità, lotti, scadenze, righe tolte (tra gli articoli già nell'EM) e numero DDT vengono aggiornati
+   *  - l'ordine non si può cambiare, e un articolo mai caricato non si aggiunge (errore chiaro, niente scritto)
+   *  - un lotto già presente in Giobby non viene modificato: se la scadenza è diversa o un lotto non serve più, esce un avviso
+   * @returns {{riferimento:string, avvisi:string[]}}
+   */
+  async aggiornaCarico(ddtOriginale, { riferimento, precedente } = {}) {
+    const numeroDdt = String(ddtOriginale.numero_ddt ?? '').trim();
+    if (!numeroDdt) throw new Error('Numero DDT mancante');
+    const senzaZeri = (s) => cifre(s).replace(/^0+/, '');
+    if (precedente && senzaZeri(precedente.numero_ordine_cliente) && senzaZeri(precedente.numero_ordine_cliente) !== senzaZeri(ddtOriginale.numero_ordine_cliente)) {
+      throw new Error('Il numero d\'ordine non si può cambiare dopo il carico: l\'Entrata Merci resta collegata al suo ordine');
+    }
+
+    // codici del fornitore -> codici di Giobby (prima di scrivere qualsiasi cosa)
+    const risoluzioni = risolviArticoli(ddtOriginale.righe, await this.prodotti());
+    const daScegliere = righeDaScegliere(ddtOriginale.righe, risoluzioni);
+    if (daScegliere) throw new Error(daScegliere);
+    const ddt = conCodiciGiobby(ddtOriginale, risoluzioni);
+
+    let emId = /Giobby id (\d+)/.exec(String(riferimento ?? ''))?.[1];
+    if (!emId) {
+      const vecchio = String(precedente?.numero_ddt ?? numeroDdt).trim();
+      const trovate = (await this.#elenco('/purchases/goodsreceipt', 'documentsHeaders')).filter((d) => String(d.docNumber) === vecchio);
+      if (trovate.length !== 1) throw new Error(`Non trovo l'Entrata Merci di questo DDT in Giobby (${trovate.length} risultati per il n° ${vecchio}): correggila a mano in Giobby`);
+      emId = String(trovate[0].id);
+    }
+
+    const { document: documento } = await this.http.get(`/purchases/${emId}/goodsreceipt`);
+    if (!documento?.rows) throw new Error(`Entrata Merci ${emId} non leggibile in Giobby`);
+    const { documento: nuovo, avvisi: avvisiRighe, nonCaricate } = adattaEntrataMerci(documento, ddt);
+    if (nonCaricate.length) {
+      throw new Error(`Articoli non presenti nell'Entrata Merci: ${nonCaricate.join(', ')}. Un articolo che non era stato caricato non si può aggiungere da qui: fallo in Giobby`);
+    }
+    if (!nuovo.rows.some((r) => r.idPosType === 1)) throw new Error('Nessuna riga del DDT corrisponde all\'Entrata Merci');
+
+    const avvisi = avvisiRighe.map((a) => a.replace(/è nell'ordine ma non nel DDT, tolto dal carico/, 'non è più nel DDT: tolto dall\'Entrata Merci'));
+    avvisi.push(...await this.#assicuraLotti(ddt.righe, ddt));
+    const lottiOra = new Set(ddt.righe.map((r) => String(r.lotto ?? '').trim().toUpperCase()).filter(Boolean));
+    for (const r of precedente?.righe ?? []) {
+      const l = String(r.lotto ?? '').trim();
+      if (l && !lottiOra.has(l.toUpperCase())) avvisi.push(`Il lotto ${l} creato con il carico precedente resta in Giobby: eliminalo a mano se non serve più`);
+    }
+
+    nuovo.docNumber = numeroDdt;
+    const senzaDdt = String(nuovo.note ?? '').replace(/(?:\s-\s)?DDT fornitore n\. .*? del (?:\d{4}-\d{2}-\d{2}|\?)/g, '').trim();
+    nuovo.note = [senzaDdt, `DDT fornitore n. ${numeroDdt} del ${ddt.data_ddt || '?'}`].filter(Boolean).join(' - ').slice(0, 250);
+    await this.http.richiesta('PUT', `/purchases/${emId}/goodsreceipt`, { body: corpoPerAggiornamento(nuovo) });
+
+    const rif = String(riferimento ?? '');
+    const nuovoRif = /^EM .*? \(Giobby id/.test(rif) ? rif.replace(/^EM .*? \(Giobby id/, `EM ${numeroDdt} (Giobby id`) : `EM ${numeroDdt} (Giobby id ${emId})`;
+    return { riferimento: nuovoRif, avvisi };
   }
 }
 

@@ -175,3 +175,7 @@ div.err { background: var(--err-bg); border-color: #d33; color: #6e1411; } div.i
 .tipbox { position: fixed; z-index: 100; width: 280px; background: #172230; color: #fff; padding: 10px 12px; border-radius: 10px; font-size: 12.5px; font-weight: 400; line-height: 1.4; box-shadow: 0 6px 20px rgba(8, 24, 40, .35); pointer-events: none; white-space: normal; text-align: left; text-transform: none; letter-spacing: 0; }
 .tipbox b { display: block; margin-bottom: 3px; font-size: 13px; }
 td.abb { min-width: 220px; } td.abb select { min-width: 200px; }
+/* ---------- Modulo B (picking) */
+textarea { width: 100%; padding: 10px; border: 1px solid #cbd3dc; border-radius: 8px; font: 12.5px/1.45 ui-monospace, Consolas, monospace; background: #fff; color: var(--ink); resize: vertical; }
+textarea:focus { outline: 2px solid #2f7fc155; border-color: var(--accent); }
+.beta { font-size: 11px; text-transform: uppercase; letter-spacing: .5px; background: var(--warn-bg); color: var(--warn); padding: 2px 8px; border-radius: 9px; vertical-align: middle; margin-left: 6px; }
