@@ -169,6 +169,12 @@ export const findDuplicato = (chiave, beforeId) =>
 /** Un ALTRO DDT già in invio/caricato con la stessa chiave (serve alla modifica dopo il carico). */
 export const findAltroCaricato = (chiave, excludeId) =>
   db.prepare(`SELECT id FROM ddt WHERE chiave_ddt=? AND id<>? AND status IN ('in_invio','caricato') LIMIT 1`).get(chiave, excludeId) ?? null;
+
+/** Stesso n° e data DDT ma chiave diversa (fornitore letto in modo diverso): solo avviso. */
+export const findStessoNumero = (numero, data, chiave, beforeId) =>
+  db.prepare(`SELECT id FROM ddt WHERE numero_ddt=? AND data_ddt=? AND id<? AND status<>'scartato'
+              AND (chiave_ddt IS NULL OR chiave_ddt<>?)`).all(numero, data, beforeId, chiave ?? '');
+
 /**
  * Prenota l'invio in modo atomico: da_verificare|errore -> in_invio.
  * Fallisce (false) se la riga è già in invio/caricata o se un altro DDT con la stessa chiave
