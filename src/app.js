@@ -7,7 +7,7 @@ import express from 'express';
 import multer from 'multer';
 import { config } from './config.js';
 import * as db from './db.js';
-import { aggiornaCaricato, confermaEInvia, ingest, salva, scarta, valuta } from './service.js';
+import { aggiornaCaricato, chiudiResiduo, confermaEInvia, ingest, residuoCaricato, salva, scarta, valuta } from './service.js';
 import { normalize } from './validation.js';
 import { DdtSchema } from './schemas.js';
 import { risolviArticoli } from './articoli.js';
@@ -190,6 +190,25 @@ export function createApp() {
       if (out.errori) return res.status(422).json({ error: `Correggi prima: ${out.errori.join(' · ')}` });
       if (!out.ok) return res.status(502).json({ error: `Giobby non è stato aggiornato: ${out.errore}` });
       res.json({ ok: true, ...detail(db.get(row.id)) });
+    } catch (e) { next(e); }
+  });
+    // Consegne parziali: cosa manca all'ordine di un DDT caricato, e (se il resto non arriva) chiusura dell'ordine + nuovo ordine per il resto.
+  app.get('/api/ddt/:id/residuo', load, async (req, res) => {
+    const { row } = req;
+    if (row.status !== 'caricato') return res.status(409).json({ error: 'Il DDT non è ancora caricato su Giobby' });
+    try {
+      const info = await residuoCaricato(row);
+      res.json(info ? { disponibile: true, ...info } : { disponibile: false });
+    } catch (e) {
+      res.status(502).json({ error: `Giobby: ${e.message || e}` });
+    }
+  });
+
+  app.post('/api/ddt/:id/residuo/chiudi', load, async (req, res, next) => {
+    try {
+      const out = await chiudiResiduo(req.row, String(req.body?.consegna ?? ''));
+      if (!out.ok) return res.status(out.tipo === 'dati' ? 422 : 502).json({ error: out.tipo === 'dati' ? out.errore : `Giobby non è stato modificato come previsto: ${out.errore}` });
+      res.json({ ok: true, ...out.esito });
     } catch (e) { next(e); }
   });
   app.post('/api/ddt/:id/scarta', load, (req, res) => {

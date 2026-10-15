@@ -7,6 +7,7 @@ import * as db from './db.js';
 import { extractor } from './extractor.js';
 import { fileCompleto } from './filecheck.js';
 import { getGiobbyClient } from './giobby.js';
+import { dataGiobby, oggiIso } from './giobbyCarico.js';
 import { emptyDdt } from './schemas.js';
 import { check, metaDdt, normalize } from './validation.js';
 
@@ -148,7 +149,30 @@ export async function aggiornaCaricato(row, ddt) {
     inAggiornamento.delete(row.id);
   }
 }
+/** Cosa manca all'ordine del carico (null in simulazione: senza Giobby non ci sono ordini). */
+export const residuoCaricato = (row) => getGiobbyClient().residuoDelCarico(row.giobby_ref);
 
+const inChiusura = new Set(); // evita due chiusure dello stesso ordine (doppio clic): si creerebbero due ordini per il resto
+
+/**
+ * Il resto della consegna non arriva più: chiude l'ordine e ne crea uno nuovo con quello che manca.
+ * @param consegna data di consegna prevista del nuovo ordine, AAAA-MM-GG
+ * @returns {{ok:true, esito:object}|{ok:false, errore:string, tipo:'dati'|'giobby'}}
+ */
+export async function chiudiResiduo(row, consegna) {
+  if (row.status !== 'caricato') return { ok: false, tipo: 'dati', errore: 'Il DDT non è ancora caricato su Giobby' };
+  if (dataGiobby(consegna) == null) return { ok: false, tipo: 'dati', errore: 'Indica una data di consegna valida' };
+  if (consegna < oggiIso()) return { ok: false, tipo: 'dati', errore: 'La data di consegna non può essere nel passato' };
+  if (inChiusura.has(row.id)) return { ok: false, tipo: 'dati', errore: 'Operazione già in corso' };
+  inChiusura.add(row.id);
+  try {
+    return { ok: true, esito: await getGiobbyClient().chiudiOrdineConResiduo(row.giobby_ref, { consegna }) };
+  } catch (e) {
+    return { ok: false, tipo: 'giobby', errore: String(e.message || e) };
+  } finally {
+    inChiusura.delete(row.id);
+  }
+}
 export function scarta(row) {
   if (!['da_verificare', 'errore'].includes(row.status)) return false;
   db.update(row.id, { status: 'scartato' });

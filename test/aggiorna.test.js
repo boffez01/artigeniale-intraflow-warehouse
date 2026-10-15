@@ -80,3 +80,29 @@ test('API: un DDT caricato si corregge e la modifica parte verso Giobby; gli alt
   assert.match(inverso.body.error, /già un altro DDT/);
   assert.equal(db.get(id).numero_ddt, '901');
 });
+
+test('API residuo: in simulazione non ci sono ordini; DDT non caricato = 409; data non valida = 422', async (t) => {
+  const server = createApp().listen(0);
+  t.after(() => server.close());
+  const base = `http://127.0.0.1:${server.address().port}`;
+  const json = async (url, method, body) => {
+    const r = await fetch(base + url, { method, headers: { 'Content-Type': 'application/json' }, body: body && JSON.stringify(body) });
+    return { status: r.status, body: await r.json() };
+  };
+  prossimo = '960';
+  const fd = new FormData(); fd.append('file', pdf('R'), 'r.pdf');
+  const { id } = await (await fetch(`${base}/api/upload`, { method: 'POST', body: fd })).json();
+  assert.equal((await json(`/api/ddt/${id}/residuo`, 'GET')).status, 409);
+  assert.equal((await json(`/api/ddt/${id}/residuo/chiudi`, 'POST', { consegna: iso(10) })).status, 422);
+
+  assert.equal((await json(`/api/ddt/${id}/invia`, 'POST', corpo('960'))).status, 200);
+  assert.deepEqual((await json(`/api/ddt/${id}/residuo`, 'GET')).body, { disponibile: false });
+  const male = await json(`/api/ddt/${id}/residuo/chiudi`, 'POST', { consegna: '31/12/2030' });
+  assert.equal(male.status, 422);
+  const passato = await json(`/api/ddt/${id}/residuo/chiudi`, 'POST', { consegna: iso(-3) });
+  assert.equal(passato.status, 422);
+  assert.match(passato.body.error, /passato/);
+  const sim = await json(`/api/ddt/${id}/residuo/chiudi`, 'POST', { consegna: iso(10) });
+  assert.equal(sim.status, 502);
+  assert.match(sim.body.error, /GIOBBY_MODE=api/);
+});

@@ -115,3 +115,70 @@ export function corpoPerAggiornamento(documento) {
 
 /** Data di oggi in Italia come AAAA-MM-GG (la data dell'Entrata Merci è il giorno di arrivo della merce). */
 export const oggiIso = (adesso = new Date()) => new Intl.DateTimeFormat('sv-SE', { timeZone: FUSO }).format(adesso);
+
+// ---------------------------------------------------------------- Consegne parziali (ordine residuo)
+
+/** "ODA N. 6 del 12/10/26", "ODA 6", "oda n°6" -> "6". Null se non c'è un numero d'ordine. */
+export const numeroOrdine = (testo) => /ODA\s*(?:N\.?\s*°?\s*)?(\d+)/i.exec(String(testo ?? ''))?.[1] ?? null;
+
+const arrotonda = (n) => Math.round(n * 1000) / 1000;
+
+/**
+ * Quantità ricevute per articolo, per un ordine, lette da una o più Entrate Merci.
+ * Nell'EM, ogni ordine è introdotto da una riga di testo "Riferimento a ODA N. 6 del ...": le righe articolo
+ * che la seguono (fino al prossimo riferimento) sono merce di quell'ordine.
+ * @returns {Map<string, number>} codice articolo -> quantità ricevuta
+ */
+export function ricevutoPerOrdine(entrateMerci, numero) {
+  const tot = new Map();
+  for (const em of entrateMerci) {
+    let corrente = null;
+    for (const r of em.rows ?? []) {
+      if (r.idPosType === 5) { corrente = numeroOrdine(r.description); continue; }
+      if (r.idPosType === 1 && corrente != null && Number(corrente) === Number(numero) && r.idMaterial) {
+        tot.set(r.idMaterial, arrotonda((tot.get(r.idMaterial) ?? 0) + Number(r.quantity || 0)));
+      }
+    }
+  }
+  return tot;
+}
+
+/** Ordinato / ricevuto / residuo per ogni riga articolo dell'ordine. */
+export function calcolaResiduo(ordine, ricevuto) {
+  const per = new Map();
+  for (const r of ordine.rows ?? []) {
+    if (r.idPosType !== 1 || !r.idMaterial) continue;
+    const x = per.get(r.idMaterial) ?? { codice: r.idMaterial, descrizione: r.description, um: r.um, ordinato: 0 };
+    x.ordinato = arrotonda(x.ordinato + Number(r.quantity || 0));
+    per.set(r.idMaterial, x);
+  }
+  return [...per.values()].map((x) => {
+    const ric = ricevuto.get(x.codice) ?? 0;
+    return { ...x, ricevuto: ric, residuo: Math.max(0, arrotonda(x.ordinato - ric)) };
+  });
+}
+
+const RIGA_ORDINE = ['idMaterial', 'idPosType', 'price', 'quantity', 'dsc1', 'dsc2', 'dsc3', 'dsc4', 'idVat', 'description', 'um', 'idStorage', 'idLocation', 'accountCode', 'note'];
+
+/**
+ * Corpo del POST per il nuovo ordine che raccoglie il residuo di un ordine chiuso.
+ * Il numero lo assegna Giobby; nei riferimenti interni c'è "ODA n" dell'ordine di partenza (è il collegamento tra i due).
+ * @param residui [{codice, residuo}]  solo le righe con residuo > 0
+ */
+export function corpoOrdineResiduo(ordine, residui, { oggi, consegna }) {
+  const base = corpoPerAggiornamento(ordine);
+  delete base.docNumber;
+  delete base.note;
+  const quanti = new Map(residui.map((r) => [r.codice, r.residuo]));
+  const rows = [];
+  for (const r of ordine.rows) {
+    if (r.idPosType !== 1 || !quanti.get(r.idMaterial)) continue;
+    const riga = {};
+    for (const k of RIGA_ORDINE) if (r[k] !== undefined && r[k] !== null) riga[k] = r[k];
+    riga.quantity = quanti.get(r.idMaterial);
+    riga.deliveryDate = dataGiobby(consegna);
+    quanti.delete(r.idMaterial); // un articolo ripetuto su più righe: il residuo si mette una volta sola
+    rows.push(riga);
+  }
+  return { ...base, idBu: ordine.idBu, docDate: dataGiobby(oggi), internalNote: `ODA ${ordine.docNumber}`, rows };
+}

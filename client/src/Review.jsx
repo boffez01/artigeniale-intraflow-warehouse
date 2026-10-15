@@ -3,6 +3,7 @@ import { api } from './api.js';
 import { fmtData } from './format.js';
 import Icon from './Icons.jsx';
 import { ultimaLista } from './nav.js';
+import Residuo from './Residuo.jsx';
 import Tag, { Spiega } from './Tag.jsx';
 
 const RIGA_VUOTA = { codice_articolo: '', descrizione: '', quantita: '', unita_misura: '', lotto: '', data_scadenza: '', articolo_giobby: '', scadenza_a_fine_mese: false, campi_incerti: [] };
@@ -169,7 +170,7 @@ export default function Review({ id }) {
           {editabile && <button className="sec" style={{ marginTop: 10 }}
             onClick={() => set({ righe: [...form.righe, { ...RIGA_VUOTA }] })}>+ Aggiungi riga</button>}
         </div>
-
+        {caricato && <Residuo id={det.id} />}
         {caricato && (
           <div className="actions">
             <button disabled={busy || !dirty || daScegliere > 0} onClick={aggiorna}>Salva e aggiorna su Giobby</button>

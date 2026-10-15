@@ -5,7 +5,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { config } from './config.js';
 import { catalogo, conCodiciGiobby, righeDaScegliere, risolviArticoli } from './articoli.js';
-import { adattaEntrataMerci, corpoPerAggiornamento, dataGiobby, oggiIso } from './giobbyCarico.js';
+import { adattaEntrataMerci, calcolaResiduo, corpoOrdineResiduo, corpoPerAggiornamento, dataGiobby, numeroOrdine, oggiIso, ricevutoPerOrdine } from './giobbyCarico.js';
 import { GiobbyError, GiobbyHttp } from './giobbyHttp.js';
 
 class DryRunGiobby {
@@ -21,6 +21,9 @@ class DryRunGiobby {
     fs.writeFileSync(path.join(config.outboxDir, nome), JSON.stringify({ aggiornamento: riferimento, ...ddt }, null, 2));
     return { riferimento: riferimento || null, avvisi: [] };
   }
+  /** Senza collegamento a Giobby non ci sono ordini da leggere né da chiudere. */
+  async residuoDelCarico() { return null; }
+  async chiudiOrdineConResiduo() { throw new Error('Disponibile solo con il collegamento a Giobby (GIOBBY_MODE=api)'); }
 }
 
 const STATI_ORDINE_APERTO = ['CREATED', 'GOOD_PARTIAL_RECEIVED'];
@@ -44,6 +47,8 @@ export class ApiGiobby {
     this.oggi = oggi;
   }
 
+  #ordiniCache = null;
+
   async #elenco(percorso, chiaveRisposta) {
     const tutti = [];
     for (let offset = 0; offset < 5000;) {
@@ -65,14 +70,25 @@ export class ApiGiobby {
     const numeri = new Set((String(ddt.numero_ordine_cliente ?? '').match(/\d+/g) || []).map((n) => String(Number(n))));
     if (!numeri.size) throw new Error('Il DDT non riporta un numero d\'ordine: non so a quale ordine di Giobby agganciare il carico');
     const piva = cifre(ddt.partita_iva_fornitore);
-    const candidati = (await this.#elenco('/purchases/orders', 'documentsHeaders')).filter((o) => {
+    this.#ordiniCache = await this.#elenco('/purchases/orders', 'documentsHeaders');
+    const candidati = this.#ordiniCache.filter((o) => {
       if (!numeri.has(String(Number(cifre(o.docNumber))))) return false;
       const pivaOrdine = cifre(o.vendorData?.vatcode);
       return !piva || !pivaOrdine || piva === pivaOrdine;
     });
     if (!candidati.length) throw new Error(`Ordine "${ddt.numero_ordine_cliente}" non trovato in Giobby per questo fornitore`);
     if (candidati.length > 1) throw new Error(`Più ordini in Giobby corrispondono a "${ddt.numero_ordine_cliente}" (${candidati.map((o) => o.docDescription).join(', ')}): scegli a mano`);
-    const ordine = candidati[0];
+    let ordine = candidati[0];
+    // Ordine chiuso perché il resto arriverà più tardi: il resto è in un nuovo ordine che porta "ODA n" nei riferimenti interni.
+    const tutti = this.#ordiniCache ?? [];
+    for (let salti = 0; !STATI_ORDINE_APERTO.includes(ordine.docStatus) && salti < 5; salti++) {
+      const figli = tutti.filter((o) => o.id !== ordine.id && String(o.idVendor) === String(ordine.idVendor)
+        && numeroOrdine(o.internalNote) === String(Number(cifre(ordine.docNumber))));
+      // se il resto è già in un ordine aperto, quello; se anche quello è stato chiuso a sua volta, si prosegue lungo la catena
+      const successore = figli.find((o) => STATI_ORDINE_APERTO.includes(o.docStatus)) ?? figli.sort((a, b) => Number(b.id) - Number(a.id))[0];
+      if (!successore) break;
+      ordine = successore;
+    }
     if (!STATI_ORDINE_APERTO.includes(ordine.docStatus)) {
       throw new Error(`L'ordine ${ordine.docDescription} è già "${ordine.docStatusDesc || ordine.docStatus}": non carico altra merce`);
     }
@@ -216,6 +232,83 @@ export class ApiGiobby {
     const rif = String(riferimento ?? '');
     const nuovoRif = /^EM .*? \(Giobby id/.test(rif) ? rif.replace(/^EM .*? \(Giobby id/, `EM ${numeroDdt} (Giobby id`) : `EM ${numeroDdt} (Giobby id ${emId})`;
     return { riferimento: nuovoRif, avvisi };
+  }
+
+  // ------------------------------------------------------------ Consegne parziali
+
+  /** Id dell'Entrata Merci dal riferimento salvato al carico ("... Giobby id 12 ..."). */
+  #idEm(riferimento) {
+    const id = /Giobby id (\d+)/.exec(String(riferimento ?? ''))?.[1];
+    if (!id) throw new Error('Riferimento Giobby mancante: non so quale Entrata Merci controllare');
+    return id;
+  }
+
+  /**
+   * Situazione dell'ordine a cui si riferisce un carico: cosa è stato ordinato, ricevuto e cosa manca.
+   * Ordinato = righe dell'ordine; ricevuto = somma delle righe di tutte le Entrate Merci dello stesso fornitore
+   * che portano il "Riferimento a ODA n" (anche quelle fatte a mano in Giobby).
+   */
+  async residuoDelCarico(riferimento) {
+    const emId = this.#idEm(riferimento);
+    const { document: em } = await this.http.get(`/purchases/${emId}/goodsreceipt`);
+    const numero = numeroOrdine((em?.rows ?? []).find((r) => r.idPosType === 5)?.description);
+    if (!numero) throw new Error('L\'Entrata Merci non cita un ordine: non posso calcolare cosa manca');
+    const ordini = await this.#elenco('/purchases/orders', 'documentsHeaders');
+    const testata = ordini.find((o) => String(Number(cifre(o.docNumber))) === String(Number(numero)) && String(o.idVendor) === String(em.idVendor));
+    if (!testata) throw new Error(`Ordine ODA ${numero} non trovato in Giobby`);
+    const { document: ordine } = await this.http.get(`/purchases/${testata.id}/orders`);
+
+    const entrate = [];
+    for (const h of await this.#elenco('/purchases/goodsreceipt', 'documentsHeaders')) {
+      if (String(h.idVendor) !== String(em.idVendor) || Number(h.createDate) < Number(testata.createDate) - 60_000) continue;
+      entrate.push((await this.http.get(`/purchases/${h.id}/goodsreceipt`)).document);
+    }
+    const righe = calcolaResiduo(ordine, ricevutoPerOrdine(entrate, ordine.docNumber));
+    const successore = ordini.find((o) => STATI_ORDINE_APERTO.includes(o.docStatus)
+      && String(o.idVendor) === String(testata.idVendor) && numeroOrdine(o.internalNote) === String(Number(cifre(ordine.docNumber))));
+    return {
+      ordine: { id: testata.id, descrizione: testata.docDescription, stato: ordine.docStatus, statoDescrizione: ordine.docStatusDesc },
+      aperto: STATI_ORDINE_APERTO.includes(ordine.docStatus),
+      righe,
+      mancaQualcosa: righe.some((r) => r.residuo > 0),
+      successore: successore ? { id: successore.id, descrizione: successore.docDescription } : null,
+    };
+  }
+
+  /**
+   * Il resto non arriva più entro il mese: si crea un nuovo ordine con il residuo (consegna = data indicata,
+   * "ODA n" nei riferimenti interni) e si chiude l'ordine di partenza ("Ordine evaso").
+   * Prima si crea il nuovo e poi si chiude il vecchio: se la chiusura fallisce il nuovo ordine viene tolto,
+   * così non restano due ordini aperti per la stessa merce. Se il nuovo esiste già (tentativo interrotto) non se ne crea un altro.
+   */
+  async chiudiOrdineConResiduo(riferimento, { consegna }) {
+    if (dataGiobby(consegna) == null) throw new Error('Data di consegna non valida');
+    const info = await this.residuoDelCarico(riferimento);
+    if (!info.aperto) throw new Error(`L'ordine ${info.ordine.descrizione} è già "${info.ordine.statoDescrizione || info.ordine.stato}"`);
+    const mancanti = info.righe.filter((r) => r.residuo > 0);
+    if (!mancanti.length) throw new Error('Non manca niente: l\'ordine è completo');
+
+    const { document: ordine } = await this.http.get(`/purchases/${info.ordine.id}/orders`);
+    let nuovo = info.successore ? { id: info.successore.id, docDescription: info.successore.descrizione } : null;
+    let creatoOra = false;
+    if (!nuovo) {
+      await this.http.post('/purchases/orders', corpoOrdineResiduo(ordine, mancanti, { oggi: this.oggi(), consegna }));
+      creatoOra = true;
+      const dopo = await this.#elenco('/purchases/orders', 'documentsHeaders');
+      const trovati = dopo.filter((o) => STATI_ORDINE_APERTO.includes(o.docStatus) && String(o.idVendor) === String(ordine.idVendor)
+        && numeroOrdine(o.internalNote) === String(Number(cifre(ordine.docNumber))));
+      nuovo = trovati.sort((a, b) => Number(b.id) - Number(a.id))[0];
+      if (!nuovo) throw new Error('Il nuovo ordine è stato creato ma non lo ritrovo in Giobby: controlla a mano (e non chiudere il vecchio)');
+    }
+    try {
+      await this.http.richiesta('PUT', `/purchases/${ordine.id}/orders`, { body: { ...corpoPerAggiornamento(ordine), docStatus: 'COMPLETED_ORDER' } });
+    } catch (e) {
+      if (creatoOra) {
+        try { await this.http.richiesta('DELETE', `/purchases/${nuovo.id}/orders`); } catch { /* da togliere a mano: non c'è altro da fare */ }
+      }
+      throw e;
+    }
+    return { chiuso: info.ordine.descrizione, nuovo: nuovo.docDescription, nuovoId: nuovo.id, righe: mancanti.length };
   }
 }
 
