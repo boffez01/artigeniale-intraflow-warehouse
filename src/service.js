@@ -121,6 +121,34 @@ export async function confermaEInvia(row, ddt) {
   }
 }
 
+const inAggiornamento = new Set(); // evita due modifiche contemporanee sullo stesso DDT (doppio clic)
+
+/**
+ * Modifica di un DDT già caricato: validazione completa, poi aggiornamento dell'Entrata Merci in Giobby.
+ * Il DB cambia SOLO se Giobby ha accettato la modifica: così scheda e gestionale non divergono.
+ * @returns {{ok:true, esito:object}|{ok:false, errori?:string[], errore?:string}}
+ */
+export async function aggiornaCaricato(row, ddt) {
+  if (row.status !== 'caricato') return { ok: false, errore: 'Il DDT non è ancora caricato su Giobby' };
+  const { meta, esito } = valuta(ddt, row.id);
+  if (esito.errori.length) return { ok: false, errori: esito.errori };
+  if (meta.chiave_ddt && db.findAltroCaricato(meta.chiave_ddt, row.id)) {
+    return { ok: false, errori: ['Esiste già un altro DDT caricato con questo fornitore, numero e data'] };
+  }
+  if (inAggiornamento.has(row.id)) return { ok: false, errore: 'Aggiornamento già in corso' };
+  inAggiornamento.add(row.id);
+  try {
+    const out = await getGiobbyClient().aggiornaCarico(ddt, { riferimento: row.giobby_ref, precedente: row.payload });
+    const finale = { errori: [], avvisi: [...esito.avvisi, ...out.avvisi] };
+    db.update(row.id, { payload: ddt, warnings: finale, ...meta, giobby_ref: out.riferimento ?? row.giobby_ref, error: null });
+    return { ok: true, esito: finale };
+  } catch (e) {
+    return { ok: false, errore: String(e.message || e) }; // il DDT resta com'era: Giobby non è stato toccato (o non del tutto)
+  } finally {
+    inAggiornamento.delete(row.id);
+  }
+}
+
 export function scarta(row) {
   if (!['da_verificare', 'errore'].includes(row.status)) return false;
   db.update(row.id, { status: 'scartato' });

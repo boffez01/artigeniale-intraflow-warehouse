@@ -7,7 +7,7 @@ import express from 'express';
 import multer from 'multer';
 import { config } from './config.js';
 import * as db from './db.js';
-import { confermaEInvia, ingest, salva, scarta, valuta } from './service.js';
+import { aggiornaCaricato, confermaEInvia, ingest, salva, scarta, valuta } from './service.js';
 import { normalize } from './validation.js';
 import { DdtSchema } from './schemas.js';
 import { risolviArticoli } from './articoli.js';
@@ -100,6 +100,7 @@ const detail = (row) => ({
   pagina: row.pagina || 1, // pagina del file dove inizia questo DDT
   altri_ddt_del_file: db.findStessoFile(row.file_hash, row.id), // PDF con più DDT: gli altri
   editabile: editabile(row),
+  modificabile: editabile(row) || row.status === 'caricato', // un DDT già caricato si può correggere: la modifica va anche su Giobby
   ddt: row.payload,
   // per i documenti ancora modificabili l'esito si ricalcola ad ogni lettura (es. un originale scartato nel frattempo)
   esito: editabile(row) ? valuta(row.payload, row.id).esito : row.warnings,
@@ -180,7 +181,17 @@ export function createApp() {
       res.status(out.ok ? 200 : 422).json({ ok: out.ok, ...detail(fresh), esito: out.esito });
     } catch (e) { next(e); }
   });
-
+  // Correzione di un DDT già caricato: aggiorna la scheda e l'Entrata Merci in Giobby (se Giobby rifiuta, non cambia nulla).
+  app.post('/api/ddt/:id/aggiorna', load, async (req, res, next) => {
+    try {
+      const { row } = req;
+      if (row.status !== 'caricato') return res.status(409).json({ error: 'Solo un DDT già caricato si aggiorna da qui' });
+      const out = await aggiornaCaricato(row, buildDdt(req.body));
+      if (out.errori) return res.status(422).json({ error: `Correggi prima: ${out.errori.join(' · ')}` });
+      if (!out.ok) return res.status(502).json({ error: `Giobby non è stato aggiornato: ${out.errore}` });
+      res.json({ ok: true, ...detail(db.get(row.id)) });
+    } catch (e) { next(e); }
+  });
   app.post('/api/ddt/:id/scarta', load, (req, res) => {
     if (!scarta(req.row)) return res.status(409).json({ error: 'DDT non scartabile in questo stato' });
     res.json(detail(db.get(req.row.id)));

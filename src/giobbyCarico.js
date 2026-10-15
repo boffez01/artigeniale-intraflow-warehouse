@@ -37,6 +37,7 @@ const norm = (s) => String(s ?? '').trim().toUpperCase();
  *  - righe di riferimento/testo (es. "Riferimento a ODA N. 1") restano
  * Ritorna { documento, avvisi, nonCaricate } (nonCaricate = codici del DDT che non si sono potuti abbinare all'ordine). Non modifica l'oggetto ricevuto.
  */
+
 export function adattaEntrataMerci(documento, ddt) {
   const avvisi = [];
   const nonCaricate = [];
@@ -44,21 +45,28 @@ export function adattaEntrataMerci(documento, ddt) {
   const usate = new Set();
   const nuove = [];
   let maxPos = Math.max(0, ...documento.rows.map((r) => Number(r.idPos) || 0));
+  const gestiti = new Set(); // articoli già sistemati (un articolo può avere più righe nell'EM: una per lotto)
 
   for (const riga of documento.rows) {
     if (riga.idPosType !== 1 || !riga.idMaterial) { nuove.push({ ...riga }); continue; }
+    const articolo = norm(riga.idMaterial);
+    if (gestiti.has(articolo)) continue; // già riempito insieme alla prima riga di questo articolo
+    gestiti.add(articolo);
 
     const delDdt = righeDdt
       .map((r, i) => ({ r, i }))
-      .filter(({ r, i }) => !usate.has(i) && norm(r.codice_articolo) === norm(riga.idMaterial));
+      .filter(({ r, i }) => !usate.has(i) && norm(r.codice_articolo) === articolo);
     if (!delDdt.length) {
       avvisi.push(`${riga.idMaterial}: è nell'ordine ma non nel DDT, tolto dal carico`);
       continue;
     }
 
+    // righe già presenti per questo articolo: si riusano in ordine (così una modifica dopo il carico non le rinumera),
+    // quelle che mancano si ricavano dalla prima
+    const esistenti = documento.rows.filter((x) => x.idPosType === 1 && norm(x.idMaterial) === articolo);
     delDdt.forEach(({ r, i }, k) => {
       usate.add(i);
-      const copia = k === 0 ? { ...riga } : { ...riga, idPos: ++maxPos };
+      const copia = esistenti[k] ? { ...esistenti[k] } : { ...riga, idPos: ++maxPos };
       copia.quantity = Number(r.quantita);
       const lotto = String(r.lotto ?? '').trim();
       copia.idLot = lotto || null;
@@ -77,7 +85,6 @@ export function adattaEntrataMerci(documento, ddt) {
 
   return { documento: { ...documento, rows: nuove }, avvisi, nonCaricate };
 }
-
 /** Riga di riepilogo leggibile (per i log e per lo script di prova). */
 const dataItaliana = (ms) => new Intl.DateTimeFormat('sv-SE', { timeZone: FUSO }).format(new Date(ms)); // AAAA-MM-GG
 export const descriviRiga = (r) => (r.idPosType === 1

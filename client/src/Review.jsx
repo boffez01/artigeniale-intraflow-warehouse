@@ -25,6 +25,7 @@ export default function Review({ id }) {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState('');
   const [dirty, setDirty] = useState(false);
+  const [msg, setMsg] = useState('');
   const [abb, setAbb] = useState(null); // abbinamento righe <-> articoli di Giobby ({attivo, articoli, righe} o {errore})
 
   const applica = useCallback((d) => {
@@ -35,7 +36,7 @@ export default function Review({ id }) {
 
   // Abbinamento con gli articoli di Giobby: si aggiorna 0,5 s dopo l'ultima modifica a codici, descrizioni o scelte.
   const chiaveAbb = useMemo(() => JSON.stringify((form?.righe || []).map((r) => [r.codice_articolo, r.descrizione, r.articolo_giobby])), [form]);
-  const editabileAbb = det?.editabile;
+  const editabileAbb = det?.modificabile;
   useEffect(() => {
     if (!form || !editabileAbb) return undefined;
     let vivo = true;
@@ -49,7 +50,8 @@ export default function Review({ id }) {
   if (err && !det) return <div className="err">{err} · <a href="#/archivio">Torna all'archivio</a></div>;
   if (!det) return <p>Caricamento…</p>;
 
-  const editabile = det.editabile;
+  const editabile = det.modificabile; // da verificare/errore: si modifica e si carica; già caricato: si modifica e si aggiorna Giobby
+  const caricato = det.status === 'caricato';
   const set = (patch) => { setForm((f) => ({ ...f, ...patch })); setDirty(true); };
   const setRiga = (i, campo, valore) => {
     set({
@@ -66,7 +68,12 @@ export default function Review({ id }) {
     setBusy(true); setErr('');
     try { applica(await fn()); } catch (e) { setErr(e.message); } finally { setBusy(false); }
   }
-  const salva = () => esegui(() => api.salva(id, form));
+  const salva = () => { setMsg(''); return esegui(() => api.salva(id, form)); };
+  const aggiorna = async () => {
+    if (!window.confirm('Aggiornare anche l\'Entrata Merci su Giobby con queste modifiche?')) return;
+    setBusy(true); setErr(''); setMsg('');
+    try { applica(await api.aggiorna(id, form)); setMsg('Modifiche salvate e aggiornate su Giobby.'); } catch (e) { setErr(e.message); } finally { setBusy(false); }
+  };
   const invia = () => esegui(() => api.invia(id, form));
   const scarta = async () => {
     if (!window.confirm('Scartare questo DDT? (es. è un duplicato)')) return;
@@ -104,7 +111,9 @@ export default function Review({ id }) {
             </div>
             <Tag status={det.status} />
           </div>
-          {det.status === 'caricato' && <div className="ok">Registrato su Giobby · rif. {det.giobby_ref}</div>}
+          {caricato && <div className="ok">Registrato su Giobby · rif. {det.giobby_ref}</div>}
+          {caricato && <p className="muted small">Puoi correggere i dati: premendo «Salva e aggiorna su Giobby» la modifica arriva anche all'Entrata Merci.</p>}
+          {msg && <div className="ok">{msg}</div>}
           {det.status === 'in_invio' && <div className="info">Invio a Giobby in corso (o interrotto): non reinviare, controlla prima su Giobby.</div>}
           {det.error && <div className="err">Errore: {det.error}</div>}
           {err && <div className="err">{err}</div>}
@@ -161,7 +170,12 @@ export default function Review({ id }) {
             onClick={() => set({ righe: [...form.righe, { ...RIGA_VUOTA }] })}>+ Aggiungi riga</button>}
         </div>
 
-        {editabile && (
+        {caricato && (
+          <div className="actions">
+            <button disabled={busy || !dirty || daScegliere > 0} onClick={aggiorna}>Salva e aggiorna su Giobby</button>
+          </div>
+        )}
+        {editabile && !caricato && (
           <div className="actions">
             <button className="sec" disabled={busy} onClick={salva}>Salva modifiche</button>
             <button disabled={busy || daScegliere > 0} onClick={invia}>Conferma e carica su Giobby</button>

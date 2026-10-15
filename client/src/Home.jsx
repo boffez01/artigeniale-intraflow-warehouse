@@ -58,10 +58,10 @@ export default function Home({ info }) {
       {err && <div className="err">Impossibile leggere i dati: {err}. Controlla che il backend sia acceso (<code>npm start</code>).</div>}
 
       <section className="kpis">
+        <Kpi href="#/archivio?sort=acquisito" tono="info" icona="inbox" valore={c?.oggi} titolo="Acquisiti oggi" nota={c ? `${c.totale} in archivio` : ''} />
+        <Kpi href="#/archivio?stato=caricato" tono="ok" icona="check" valore={c && (per.caricato || 0)} titolo="Caricati" nota={simulazione ? 'simulazione: nessun invio reale' : 'registrati su Giobby'} />
         <Kpi href="#/archivio?stato=da_verificare" tono="warn" icona="clock" valore={c && (per.da_verificare || 0)} titolo="Da verificare" nota="in attesa di conferma" />
         <Kpi href="#/archivio?stato=errore" tono="err" icona="alert" valore={c && (per.errore || 0)} titolo="In errore" nota="lettura o invio non riusciti" />
-        <Kpi href="#/archivio?stato=caricato" tono="ok" icona="check" valore={c && (per.caricato || 0)} titolo="Caricati" nota={simulazione ? 'simulazione: nessun invio reale' : 'registrati su Giobby'} />
-        <Kpi href="#/archivio?sort=acquisito" tono="info" icona="inbox" valore={c?.oggi} titolo="Acquisiti oggi" nota={c ? `${c.totale} in archivio` : ''} />
       </section>
 
       <div className="home-grid">
