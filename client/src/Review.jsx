@@ -27,6 +27,7 @@ export default function Review({ id }) {
   const [err, setErr] = useState('');
   const [dirty, setDirty] = useState(false);
   const [msg, setMsg] = useState('');
+    const [agg, setAgg] = useState(0); // cambia dopo ogni aggiornamento su Giobby: il riquadro «consegna parziale» si ricarica
   const [abb, setAbb] = useState(null); // abbinamento righe <-> articoli di Giobby ({attivo, articoli, righe} o {errore})
 
   const applica = useCallback((d) => {
@@ -73,7 +74,7 @@ export default function Review({ id }) {
   const aggiorna = async () => {
     if (!window.confirm('Aggiornare anche l\'Entrata Merci su Giobby con queste modifiche?')) return;
     setBusy(true); setErr(''); setMsg('');
-    try { applica(await api.aggiorna(id, form)); setMsg('Modifiche salvate e aggiornate su Giobby.'); } catch (e) { setErr(e.message); } finally { setBusy(false); }
+        try { applica(await api.aggiorna(id, form)); setAgg((n) => n + 1); setMsg('Modifiche salvate e aggiornate su Giobby.'); } catch (e) { setErr(e.message); } finally { setBusy(false); }
   };
   const invia = () => esegui(() => api.invia(id, form));
   const scarta = async () => {
@@ -170,7 +171,7 @@ export default function Review({ id }) {
           {editabile && <button className="sec" style={{ marginTop: 10 }}
             onClick={() => set({ righe: [...form.righe, { ...RIGA_VUOTA }] })}>+ Aggiungi riga</button>}
         </div>
-        {caricato && <Residuo id={det.id} />}
+                {caricato && <Residuo key={agg} id={det.id} />}
         {caricato && (
           <div className="actions">
             <button disabled={busy || !dirty || daScegliere > 0} onClick={aggiorna}>Salva e aggiorna su Giobby</button>

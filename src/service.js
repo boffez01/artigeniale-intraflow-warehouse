@@ -115,7 +115,7 @@ export async function confermaEInvia(row, ddt) {
   try {
     const ref = await getGiobbyClient().registraCarico(ddt, { chiave });
     db.update(row.id, { status: 'caricato', giobby_ref: ref, error: null });
-        aggiornaConsegne(db.get(row.id)).catch(() => {}); // in secondo piano, senza far aspettare chi conferma
+    aggiornaConsegne(db.get(row.id)).catch(() => {}); // in secondo piano, senza far aspettare chi conferma: etichetta "Consegna parziale" in archivio (e delle schede sullo stesso ordine)
     return { ok: true, esito };
   } catch (e) {
     db.update(row.id, { status: 'errore', error: String(e.message || e) }); // libera la chiave: si può riprovare
@@ -143,6 +143,7 @@ export async function aggiornaCaricato(row, ddt) {
     const out = await getGiobbyClient().aggiornaCarico(ddt, { riferimento: row.giobby_ref, precedente: row.payload });
     const finale = { errori: [], avvisi: [...esito.avvisi, ...out.avvisi] };
     db.update(row.id, { payload: ddt, warnings: finale, ...meta, giobby_ref: out.riferimento ?? row.giobby_ref, error: null });
+    aggiornaConsegne(db.get(row.id)).catch(() => {}); // le quantità sono cambiate: l'etichetta in archivio si ricalcola
     return { ok: true, esito: finale };
   } catch (e) {
     return { ok: false, errore: String(e.message || e) }; // il DDT resta com'era: Giobby non è stato toccato (o non del tutto)
@@ -150,9 +151,11 @@ export async function aggiornaCaricato(row, ddt) {
     inAggiornamento.delete(row.id);
   }
 }
+
 /** Etichetta per l'archivio: parziale (manca qualcosa, ordine aperto) | chiusa (resto in un nuovo ordine) | completa. */
 export const statoConsegna = (info) => (info ? (!info.mancaQualcosa ? 'completa' : info.aperto ? 'parziale' : 'chiusa') : null);
 
+/** Cosa manca all'ordine del carico (null in simulazione: senza Giobby non ci sono ordini). Aggiorna anche l'etichetta in archivio. */
 export async function residuoCaricato(row) {
   const info = await getGiobbyClient().residuoDelCarico(row.giobby_ref);
   const stato = statoConsegna(info);
@@ -195,7 +198,7 @@ export async function chiudiResiduo(row, consegna) {
   if (inChiusura.has(row.id)) return { ok: false, tipo: 'dati', errore: 'Operazione già in corso' };
   inChiusura.add(row.id);
   try {
-        const esito = await getGiobbyClient().chiudiOrdineConResiduo(row.giobby_ref, { consegna });
+    const esito = await getGiobbyClient().chiudiOrdineConResiduo(row.giobby_ref, { consegna });
     await aggiornaConsegne(db.get(row.id));
     return { ok: true, esito };
   } catch (e) {
@@ -204,6 +207,7 @@ export async function chiudiResiduo(row, consegna) {
     inChiusura.delete(row.id);
   }
 }
+
 export function scarta(row) {
   if (!['da_verificare', 'errore'].includes(row.status)) return false;
   db.update(row.id, { status: 'scartato' });
