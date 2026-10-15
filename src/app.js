@@ -71,6 +71,7 @@ export function filtri(qs = {}) {
     q: s(qs.q),
     stati: s(qs.stato).split(',').filter((x) => STATI.includes(x)),
     fornitore: s(qs.fornitore),
+        consegna: ['parziale', 'chiusa'].includes(s(qs.consegna)) ? s(qs.consegna) : '',
     da: iso(qs.da),
     a: iso(qs.a),
     sort: s(qs.sort),

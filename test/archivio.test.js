@@ -99,6 +99,8 @@ test('archivio: ricerca, filtri, ordinamento, paginazione, contatori, CSV', asyn
 
 test('filtri(): input del browser sempre ripulito', () => {
   const f = filtri({ q: '  abc  ', stato: 'caricato,boh,errore', da: '2026-1-1', a: '2026-02-03', dir: 'asc', limit: 'x', offset: '7', sort: ['a', 'b'], fornitore: ['x'] });
-  assert.deepEqual(f, { q: 'abc', stati: ['caricato', 'errore'], fornitore: '', da: '', a: '2026-02-03', sort: '', dir: 'asc', limit: 25, offset: 7 });
+    assert.deepEqual(f, { q: 'abc', stati: ['caricato', 'errore'], fornitore: '', consegna: '', da: '', a: '2026-02-03', sort: '', dir: 'asc', limit: 25, offset: 7 });
+  assert.equal(filtri({ consegna: 'parziale' }).consegna, 'parziale');
+  assert.equal(filtri({ consegna: "x' OR 1=1" }).consegna, '');
   assert.equal(filtri({ dir: 'DROP' }).dir, 'desc');
 });

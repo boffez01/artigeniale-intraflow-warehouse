@@ -17,6 +17,7 @@ CREATE TABLE IF NOT EXISTS ddt (
   chiave_ddt TEXT,           -- fornitore|n°DDT|data: stesso documento scansionato due volte
   numero_ddt TEXT,
   data_ddt TEXT,
+    consegna TEXT,             -- solo DDT caricati: parziale | chiusa (resto in un nuovo ordine) | completa; vuoto = non ancora controllato
   pagina INTEGER,            -- pagina del file dove inizia questo DDT
   indice_doc INTEGER,        -- posizione del DDT nel file (0,1,2...): un PDF può contenerne più di uno
   created_at TEXT NOT NULL,
@@ -25,7 +26,7 @@ CREATE TABLE IF NOT EXISTS ddt (
 
 // Migrazione per DB creati con versioni precedenti
 const cols = db.prepare('PRAGMA table_info(ddt)').all().map((c) => c.name);
-for (const c of ['file_hash', 'chiave_ddt', 'numero_ddt', 'data_ddt']) {
+for (const c of ['file_hash', 'chiave_ddt', 'numero_ddt', 'data_ddt', 'consegna']) {
   if (!cols.includes(c)) db.exec(`ALTER TABLE ddt ADD COLUMN ${c} TEXT`);
 }
 for (const c of ['pagina', 'indice_doc']) {
@@ -71,7 +72,7 @@ export const listAll = () => db.prepare('SELECT * FROM ddt ORDER BY id DESC LIMI
 // Fornitore, n° righe e controlli si leggono direttamente dal JSON con le funzioni JSON di SQLite:
 // nessuna colonna in più e nessuna migrazione.
 const COLONNE_LISTA = `
-  SELECT id, filename, status, created_at, numero_ddt, data_ddt, giobby_ref, pagina,
+    SELECT id, filename, status, created_at, numero_ddt, data_ddt, giobby_ref, pagina, consegna,
          json_extract(payload,'$.fornitore') AS fornitore,
          json_extract(payload,'$.numero_ordine_cliente') AS ordine,
          COALESCE(json_array_length(payload,'$.righe'),0) AS n_righe,
@@ -87,7 +88,7 @@ const ORDINA_PER = {
 };
 const likeEsc = (s) => `%${String(s).replace(/[\\%_]/g, '\\$&')}%`;
 
-function filtroSql({ q = '', stati = [], fornitore = '', da = '', a = '' }) {
+function filtroSql({ q = '', stati = [], fornitore = '', da = '', a = '', consegna = '' }) {
   const where = [];
   const p = {};
   if (q) {
@@ -110,6 +111,7 @@ function filtroSql({ q = '', stati = [], fornitore = '', da = '', a = '' }) {
     stati.forEach((s, i) => { p[`s${i}`] = s; });
   }
   if (fornitore) { where.push(`json_extract(payload,'$.fornitore') = @forn`); p.forn = fornitore; }
+    if (consegna) { where.push("status='caricato' AND consegna = @cons"); p.cons = consegna; }
   if (da) { where.push('data_ddt >= @da'); p.da = da; }
   if (a) { where.push('data_ddt <= @a'); p.a = a; }
   return { sql: where.length ? ` WHERE ${where.join(' AND ')}` : '', p };
@@ -134,8 +136,9 @@ export function counts() {
   const { n: oggi } = db
     .prepare(`SELECT COUNT(*) AS n FROM ddt WHERE date(created_at,'localtime') = date('now','localtime') AND status<>'scartato'`)
     .get();
-  const totale = Object.values(per).reduce((a, b) => a + b, 0);
-  return { per_stato: per, totale, oggi };
+    const totale = Object.values(per).reduce((a, b) => a + b, 0);
+  const { n: parziali } = db.prepare(`SELECT COUNT(*) AS n FROM ddt WHERE status='caricato' AND consegna='parziale'`).get();
+  return { per_stato: per, totale, oggi, parziali };
 }
 
 /** Fornitori presenti in archivio (per il filtro a tendina). */
@@ -192,3 +195,8 @@ export function claimInvio(id, chiave) {
     throw e;
   }
 }
+
+/** DDT caricati di cui non si sa ancora se la consegna è completa (o che erano parziali): da ricontrollare su Giobby. */
+export const caricatiDaRicontrollare = () =>
+  db.prepare(`SELECT id FROM ddt WHERE status='caricato' AND (consegna IS NULL OR consegna='parziale') ORDER BY id DESC LIMIT 100`)
+    .all().map((r) => get(r.id));

@@ -82,3 +82,23 @@ export function Controlli({ r }) {
     </span>
   );
 }
+
+/** Etichetta accanto allo stato dei DDT caricati: la consegna è parziale, oppure il resto è stato spostato in un nuovo ordine. */
+export function Consegna({ r }) {
+  if (r.status !== 'caricato') return null;
+  if (r.consegna === 'parziale') {
+    return (
+      <Spiega titolo="Consegna parziale" testo="Il fornitore non ha consegnato tutto quello che c'è nell'ordine. Apri la scheda per vedere cosa manca e decidere se aspettare il resto o chiudere l'ordine.">
+        <span className="chk warn">Consegna parziale</span>
+      </Spiega>
+    );
+  }
+  if (r.consegna === 'chiusa') {
+    return (
+      <Spiega titolo="Resto in un nuovo ordine" testo="L'ordine è stato chiuso con merce mancante e il resto è in un nuovo ordine su Giobby. Apri la scheda per vedere quale.">
+        <span className="chk ok">Resto in nuovo ordine</span>
+      </Spiega>
+    );
+  }
+  return null;
+}

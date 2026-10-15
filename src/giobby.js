@@ -65,7 +65,22 @@ export class ApiGiobby {
   async prodotti() {
     return catalogo(await this.#elenco('/products', 'products'));
   }
-
+  /**
+   * Ordini che raccolgono il resto di `ordine` (hanno "ODA n" nei riferimenti interni).
+   * L'elenco ordini di Giobby NON riporta i riferimenti interni (internalNote arriva vuoto): si leggono dal dettaglio
+   * di ogni ordine più recente dello stesso fornitore.
+   */
+  async #ordiniDelResto(ordine, tutti) {
+    const numero = String(Number(cifre(ordine.docNumber)));
+    const figli = [];
+    for (const o of tutti) {
+      if (o.id === ordine.id || String(o.idVendor) !== String(ordine.idVendor)) continue;
+      if (Number(o.createDate) < Number(ordine.createDate)) continue;
+      const nota = o.internalNote || (await this.http.get(`/purchases/${o.id}/orders`))?.document?.internalNote;
+      if (numeroOrdine(nota) === numero) figli.push(o);
+    }
+    return figli;
+  }
   async trovaOrdine(ddt) {
     const numeri = new Set((String(ddt.numero_ordine_cliente ?? '').match(/\d+/g) || []).map((n) => String(Number(n))));
     if (!numeri.size) throw new Error('Il DDT non riporta un numero d\'ordine: non so a quale ordine di Giobby agganciare il carico');
@@ -82,8 +97,7 @@ export class ApiGiobby {
     // Ordine chiuso perché il resto arriverà più tardi: il resto è in un nuovo ordine che porta "ODA n" nei riferimenti interni.
     const tutti = this.#ordiniCache ?? [];
     for (let salti = 0; !STATI_ORDINE_APERTO.includes(ordine.docStatus) && salti < 5; salti++) {
-      const figli = tutti.filter((o) => o.id !== ordine.id && String(o.idVendor) === String(ordine.idVendor)
-        && numeroOrdine(o.internalNote) === String(Number(cifre(ordine.docNumber))));
+            const figli = await this.#ordiniDelResto(ordine, tutti);
       // se il resto è già in un ordine aperto, quello; se anche quello è stato chiuso a sua volta, si prosegue lungo la catena
       const successore = figli.find((o) => STATI_ORDINE_APERTO.includes(o.docStatus)) ?? figli.sort((a, b) => Number(b.id) - Number(a.id))[0];
       if (!successore) break;
@@ -264,8 +278,8 @@ export class ApiGiobby {
       entrate.push((await this.http.get(`/purchases/${h.id}/goodsreceipt`)).document);
     }
     const righe = calcolaResiduo(ordine, ricevutoPerOrdine(entrate, ordine.docNumber));
-    const successore = ordini.find((o) => STATI_ORDINE_APERTO.includes(o.docStatus)
-      && String(o.idVendor) === String(testata.idVendor) && numeroOrdine(o.internalNote) === String(Number(cifre(ordine.docNumber))));
+           const figli = await this.#ordiniDelResto(testata, ordini); // anche se già ricevuto del tutto: serve per dire dove è finito il resto
+    const successore = figli.find((o) => STATI_ORDINE_APERTO.includes(o.docStatus)) ?? [...figli].sort((a, b) => Number(b.id) - Number(a.id))[0];
     return {
       ordine: { id: testata.id, descrizione: testata.docDescription, stato: ordine.docStatus, statoDescrizione: ordine.docStatusDesc },
       aperto: STATI_ORDINE_APERTO.includes(ordine.docStatus),
@@ -295,8 +309,7 @@ export class ApiGiobby {
       await this.http.post('/purchases/orders', corpoOrdineResiduo(ordine, mancanti, { oggi: this.oggi(), consegna }));
       creatoOra = true;
       const dopo = await this.#elenco('/purchases/orders', 'documentsHeaders');
-      const trovati = dopo.filter((o) => STATI_ORDINE_APERTO.includes(o.docStatus) && String(o.idVendor) === String(ordine.idVendor)
-        && numeroOrdine(o.internalNote) === String(Number(cifre(ordine.docNumber))));
+           const trovati = (await this.#ordiniDelResto(ordine, dopo)).filter((o) => STATI_ORDINE_APERTO.includes(o.docStatus));
       nuovo = trovati.sort((a, b) => Number(b.id) - Number(a.id))[0];
       if (!nuovo) throw new Error('Il nuovo ordine è stato creato ma non lo ritrovo in Giobby: controlla a mano (e non chiudere il vecchio)');
     }

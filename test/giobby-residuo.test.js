@@ -19,7 +19,7 @@ const em8 = () => ({
     riga(2, 'FAR-002', 30), riga(3, 'FAR-003', 15),
   ],
 });
-const intestazione = (o) => ({ id: o.id, docNumber: o.docNumber, docDescription: o.docDescription, docStatus: o.docStatus, docStatusDesc: o.docStatusDesc, idVendor: o.idVendor, internalNote: o.internalNote, createDate: o.createDate, vendorData: o.vendorData });
+const intestazione = (o) => ({ id: o.id, docNumber: o.docNumber, docDescription: o.docDescription, docStatus: o.docStatus, docStatusDesc: o.docStatusDesc, idVendor: o.idVendor, internalNote: '', createDate: o.createDate, vendorData: o.vendorData }); // come in Giobby: l'elenco non riporta i riferimenti interni
 const RIF = 'EM FB/2026/0731 (Giobby id 8, ODA N. 6 del 12/10/26)';
 
 /** Giobby finto con stato: gli ordini creati compaiono nell'elenco e il PUT di chiusura cambia lo stato. */

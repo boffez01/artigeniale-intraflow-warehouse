@@ -3,9 +3,9 @@ import { api } from './api.js';
 import { fmtData, fmtOra } from './format.js';
 import Icon from './Icons.jsx';
 import { ricordaLista } from './nav.js';
-import Tag, { Controlli, Spiega, STATO } from './Tag.jsx';
+import Tag, { Consegna, Controlli, Spiega, STATO } from './Tag.jsx';
 
-const DEF = { q: '', stato: '', fornitore: '', da: '', a: '', sort: 'id', dir: 'desc', limit: 25, page: 0 };
+const DEF = { q: '', stato: '', consegna: '', fornitore: '', da: '', a: '', sort: 'id', dir: 'desc', limit: 25, page: 0 };
 const LIMITI = [10, 25, 50, 100];
 // [chiave di ordinamento (null = non ordinabile), titolo, spiegazione al passaggio del mouse]
 const COLONNE = [
@@ -26,7 +26,7 @@ const daUrl = (query) => {
   const p = new URLSearchParams(query);
   const limit = Number(p.get('limit'));
   return {
-    q: p.get('q') || '', stato: p.get('stato') || '', fornitore: p.get('fornitore') || '',
+        q: p.get('q') || '', stato: p.get('stato') || '', consegna: p.get('consegna') || '', fornitore: p.get('fornitore') || '',
     da: p.get('da') || '', a: p.get('a') || '',
     sort: p.get('sort') || DEF.sort, dir: p.get('dir') === 'asc' ? 'asc' : 'desc',
     limit: LIMITI.includes(limit) ? limit : DEF.limit,
@@ -35,7 +35,7 @@ const daUrl = (query) => {
 };
 const versoUrl = (f) => {
   const p = new URLSearchParams();
-  for (const k of ['q', 'stato', 'fornitore', 'da', 'a']) if (f[k]) p.set(k, f[k]);
+   for (const k of ['q', 'stato', 'consegna', 'fornitore', 'da', 'a']) if (f[k]) p.set(k, f[k]);
   if (f.sort !== DEF.sort || f.dir !== DEF.dir) { p.set('sort', f.sort); p.set('dir', f.dir); }
   if (f.limit !== DEF.limit) p.set('limit', f.limit);
   if (f.page > 0) p.set('page', f.page);
@@ -43,7 +43,7 @@ const versoUrl = (f) => {
   return `#/archivio${s ? `?${s}` : ''}`;
 };
 const paramsApi = (f) => ({
-  q: f.q, stato: f.stato, fornitore: f.fornitore, da: f.da, a: f.a, sort: f.sort, dir: f.dir, limit: f.limit,
+   q: f.q, stato: f.stato, consegna: f.consegna, fornitore: f.fornitore, da: f.da, a: f.a, sort: f.sort, dir: f.dir, limit: f.limit,
 });
 
 export default function Archivio({ query }) {
@@ -100,7 +100,7 @@ export default function Archivio({ query }) {
     else set({ sort: k, dir: DESC_PER_DEFAULT.has(k) ? 'desc' : 'asc' });
   };
   const azzera = () => { setQInput(''); setF({ ...DEF, limit: f.limit }); };
-  const filtriAttivi = Boolean(f.q || f.stato || f.fornitore || f.da || f.a);
+  const filtriAttivi = Boolean(f.q || f.stato || f.consegna || f.fornitore || f.da || f.a);
 
   const counts = data?.counts;
   const per = counts?.per_stato || {};
@@ -125,11 +125,15 @@ export default function Archivio({ query }) {
 
       <div className="chips" role="tablist" aria-label="Filtra per stato">
         {chips.map(([s, label, n]) => (
-          <button key={s || 'tutti'} role="tab" aria-selected={f.stato === s} className={`chip ${f.stato === s ? 'on' : ''} ${s}`}
-                  onClick={() => set({ stato: s })}>
+                   <button key={s || 'tutti'} role="tab" aria-selected={f.stato === s && !f.consegna} className={`chip ${f.stato === s && !f.consegna ? 'on' : ''} ${s}`}
+                  onClick={() => set({ stato: s, consegna: '' })}>
             {label}<span>{n ?? '–'}</span>
           </button>
         ))}
+        <button role="tab" aria-selected={f.consegna === 'parziale'} className={`chip ${f.consegna === 'parziale' ? 'on' : ''}`}
+                onClick={() => set({ stato: '', consegna: f.consegna === 'parziale' ? '' : 'parziale' })}>
+          Consegne parziali<span>{counts?.parziali ?? '–'}</span>
+        </button>
       </div>
 
       <div className="card toolbar">
@@ -175,7 +179,7 @@ export default function Archivio({ query }) {
                   <td>{r.ordine || <span className="muted">—</span>}</td>
                   <td className="num" title={`${r.n_righe} ${r.n_righe === 1 ? 'riga' : 'righe'} nel DDT`}>{r.tot_articoli ? Number(r.tot_articoli.toFixed(3)).toLocaleString('it-IT') : <span className="muted">—</span>}</td>
                   <td><Controlli r={r} /></td>
-                  <td><Tag status={r.status} /></td>
+                  <td><span className="chk-group"><Tag status={r.status} /><Consegna r={r} /></span></td>
                   <td className="muted nowrap">{fmtOra(r.created_at)}</td>
                   <td className="act"><a className="btn sm sec" href={`#/ddt/${r.id}`} onClick={(e) => e.stopPropagation()}>Apri</a></td>
                 </tr>

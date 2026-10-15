@@ -115,6 +115,7 @@ export async function confermaEInvia(row, ddt) {
   try {
     const ref = await getGiobbyClient().registraCarico(ddt, { chiave });
     db.update(row.id, { status: 'caricato', giobby_ref: ref, error: null });
+        aggiornaConsegne(db.get(row.id)).catch(() => {}); // in secondo piano, senza far aspettare chi conferma
     return { ok: true, esito };
   } catch (e) {
     db.update(row.id, { status: 'errore', error: String(e.message || e) }); // libera la chiave: si può riprovare
@@ -149,8 +150,36 @@ export async function aggiornaCaricato(row, ddt) {
     inAggiornamento.delete(row.id);
   }
 }
-/** Cosa manca all'ordine del carico (null in simulazione: senza Giobby non ci sono ordini). */
-export const residuoCaricato = (row) => getGiobbyClient().residuoDelCarico(row.giobby_ref);
+/** Etichetta per l'archivio: parziale (manca qualcosa, ordine aperto) | chiusa (resto in un nuovo ordine) | completa. */
+export const statoConsegna = (info) => (info ? (!info.mancaQualcosa ? 'completa' : info.aperto ? 'parziale' : 'chiusa') : null);
+
+export async function residuoCaricato(row) {
+  const info = await getGiobbyClient().residuoDelCarico(row.giobby_ref);
+  const stato = statoConsegna(info);
+  if (stato && stato !== row.consegna) db.update(row.id, { consegna: stato });
+  return info;
+}
+
+const cifreOrdine = (t) => /\d+/.exec(String(t ?? ''))?.[0] ?? null;
+
+/**
+ * Ricontrolla su Giobby la consegna di un DDT e dei DDT "aperti" che citano lo stesso ordine
+ * (un nuovo carico può aver completato un ordine che prima era parziale). Mai bloccante: gli errori di Giobby si ignorano.
+ */
+export async function aggiornaConsegne(row) {
+  const n = cifreOrdine(row.payload?.numero_ordine_cliente);
+  const altri = db.caricatiDaRicontrollare().filter((r) => r.id !== row.id && n && cifreOrdine(r.payload?.numero_ordine_cliente) === n);
+  for (const r of [db.get(row.id), ...altri]) {
+    try { await residuoCaricato(r); } catch { /* resta com'era: si ricontrolla alla prossima occasione */ }
+  }
+}
+
+/** All'avvio: i DDT già caricati senza etichetta (caricati prima di questa funzione, o con Giobby non raggiungibile). */
+export async function aggiornaTutteLeConsegne() {
+  for (const r of db.caricatiDaRicontrollare()) {
+    try { await residuoCaricato(r); } catch { /* si riprova al prossimo avvio */ }
+  }
+}
 
 const inChiusura = new Set(); // evita due chiusure dello stesso ordine (doppio clic): si creerebbero due ordini per il resto
 
@@ -166,7 +195,9 @@ export async function chiudiResiduo(row, consegna) {
   if (inChiusura.has(row.id)) return { ok: false, tipo: 'dati', errore: 'Operazione già in corso' };
   inChiusura.add(row.id);
   try {
-    return { ok: true, esito: await getGiobbyClient().chiudiOrdineConResiduo(row.giobby_ref, { consegna }) };
+        const esito = await getGiobbyClient().chiudiOrdineConResiduo(row.giobby_ref, { consegna });
+    await aggiornaConsegne(db.get(row.id));
+    return { ok: true, esito };
   } catch (e) {
     return { ok: false, tipo: 'giobby', errore: String(e.message || e) };
   } finally {
