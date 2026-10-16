@@ -5,11 +5,34 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { config } from './config.js';
 import { catalogo, conCodiciGiobby, righeDaScegliere, risolviArticoli } from './articoli.js';
-import { adattaEntrataMerci, calcolaResiduo, corpoOrdineResiduo, corpoPerAggiornamento, dataGiobby, numeroOrdine, oggiIso, ricevutoPerOrdine } from './giobbyCarico.js';
+import { adattaEntrataMerci, calcolaResiduo, corpoOrdineResiduo, corpoOrdineVendita, corpoPerAggiornamento, righeOrdineSpezzate, dataGiobby, giacenzeDaReport, numeroOrdine, oggiIso, ordineVenditaPerPicking, ricevutoPerOrdine } from './giobbyCarico.js';
 import { GiobbyError, GiobbyHttp } from './giobbyHttp.js';
+
+// Giacenze di prova (stessi articoli del sandbox Giobby) per vedere il picking senza collegamento a Giobby.
+const GIACENZE_PROVA = [
+  { articolo: 'FAR-002', lotto: 'L2612A', scadenza: '2027-12-31', ubicazione: 'A-01-02', magazzino: 'MB', disponibile: 40 },
+  { articolo: 'FAR-002', lotto: 'L2612C', scadenza: '2027-03-31', ubicazione: 'B-02-01', magazzino: 'MB', disponibile: 25 },
+  { articolo: 'FAR-002', lotto: 'L2609Z', scadenza: '2026-09-30', ubicazione: 'A-01-01', magazzino: 'MB', disponibile: 50 },
+  { articolo: 'FAR-003', lotto: 'L2612B', scadenza: '2028-06-30', ubicazione: 'A-01-10', magazzino: 'MB', disponibile: 20 },
+];
+
+// Ordini di vendita di prova (stessi dell'esempio della pagina Picking).
+const ORDINI_PROVA = [
+  { id: 'OV-101', idGiobby: null, cliente: 'Panificio Rossi', stato: 'Creato', consegna: '2026-10-15', righe: [{ articolo: 'FAR-002', descrizione: 'Farina di mais 1 kg', quantita: 50 }, { articolo: 'FAR-003', descrizione: 'Semola 1 kg', quantita: 10 }] },
+  { id: 'OV-102', idGiobby: null, cliente: 'Pasta Bianchi', stato: 'Creato', consegna: '2026-10-14', righe: [{ articolo: 'FAR-002', descrizione: 'Farina di mais 1 kg', quantita: 30 }, { articolo: 'FAR-001', descrizione: 'Farina 00 1 kg', quantita: 5 }] },
+  { id: 'OV-103', idGiobby: null, cliente: 'Panificio Rossi', stato: 'Creato', consegna: '2026-10-16', righe: [{ articolo: 'FAR-003', descrizione: 'Semola 1 kg', quantita: 5 }] },
+];
 
 class DryRunGiobby {
   async prodotti() { return null; } // senza collegamento a Giobby non c'è un catalogo con cui abbinare
+  /** Senza collegamento a Giobby: giacenze di prova. */
+  async giacenze() { return GIACENZE_PROVA.map((g) => ({ ...g })); }
+  /** Senza collegamento a Giobby: ordini di vendita di prova. */
+  async emettiDdtUscita(idGiobby, prelievi) {
+    if (!prelievi?.length) throw new Error('Nessun prelievo da registrare');
+    return { idDdt: null, riferimento: `DDT di uscita SIMULATO (ordine ${idGiobby}): nulla è stato scritto in Giobby`, statoOrdine: null, avvisi: [] };
+  }
+  async ordiniVendita() { return ORDINI_PROVA.map((o) => ({ ...o, righe: o.righe.map((r) => ({ ...r })) })); }
   async registraCarico(ddt, { chiave } = {}) {
     const ref = `DRY-${new Date().toISOString().replace(/\D/g, '')}-${Math.random().toString(36).slice(2, 6)}`;
     fs.writeFileSync(path.join(config.outboxDir, `${ref}.json`), JSON.stringify({ chiave, ...ddt }, null, 2));
@@ -27,6 +50,8 @@ class DryRunGiobby {
 }
 
 const STATI_ORDINE_APERTO = ['CREATED', 'GOOD_PARTIAL_RECEIVED'];
+// Ordini di vendita ancora da evadere: creati o parzialmente evasi (gli altri stati, es. evaso/chiuso, si ignorano).
+const venditaAperta = (stato) => stato === 'CREATED' || /PARTIAL/i.test(String(stato ?? ''));
 const cifre = (s) => String(s ?? '').replace(/\D/g, '');
 
 /**
@@ -61,10 +86,93 @@ export class ApiGiobby {
     return tutti;
   }
 
+  /**
+   * Giacenze DISPONIBILI per articolo e lotto (già al netto della merce impegnata da altri ordini di vendita), con la scadenza del lotto.
+   * Giobby divide per lotto solo con lotsDetail=true. @param magazzino es. 'MB': solo quel magazzino (vuoto = tutti)
+   */
+  async giacenze({ magazzino = null } = {}) {
+    const report = [];
+    for (let offset = 0; offset < 20000;) {
+      const query = { lotsDetail: 'true', storageDetail: 'true', ...(magazzino ? { idStorage: magazzino } : {}), ...(offset ? { offset: String(offset) } : {}) };
+      const r = await this.http.get('/stocks/avaibility/report', query);
+      const pagina = r?.stockReports ?? [];
+      report.push(...pagina);
+      offset += pagina.length;
+      if (!pagina.length || offset >= (r?.metadata?.totalCount ?? 0)) break;
+    }
+    return giacenzeDaReport(report, await this.#elenco('/lots', 'lots'));
+  }
+
+  /**
+   * Ordini di vendita da evadere, pronti per il picking. L'elenco di Giobby non ha le righe: si legge il dettaglio di ogni ordine aperto.
+   * Ordinati per data di consegna (poi per numero). Attenzione: di un ordine già evaso in parte si legge la quantità ordinata intera.
+   */
+  async ordiniVendita() {
+    const aperti = (await this.#elenco('/sales/orders', 'documentsHeaders')).filter((o) => venditaAperta(o.docStatus));
+    const ordini = [];
+    for (const o of aperti) {
+      const { document } = await this.http.get(`/sales/${o.id}/orders`);
+      const ordine = ordineVenditaPerPicking(document);
+      if (ordine.righe.length) ordini.push(ordine);
+    }
+    return ordini.sort((a, b) => String(a.consegna ?? '9999').localeCompare(String(b.consegna ?? '9999')) || Number(a.idGiobby) - Number(b.idGiobby));
+  }
+
+  /**
+   * DDT in uscita da un ordine di vendita, con i lotti scelti (per lotto, come dal picking e dalle correzioni del back office).
+   * Giobby aggancia il DDT all'ordine solo se nasce dall'ordine, e assegna un lotto solo per riga: quindi
+   *  1) la riga dell'ordine si spezza in una riga per lotto  2) il DDT si crea dall'ordine  3) i lotti si scrivono riga per riga.
+   * Se qualcosa si ferma a metà, il DDT creato si cancella e l'ordine torna com'era. @param prelievi [{ articolo, lotto, scadenza, quantita }]
+   */
+  async emettiDdtUscita(idGiobby, prelievi) {
+    const id = Number(idGiobby);
+    if (!Number.isInteger(id) || id <= 0) throw new Error('Ordine non valido');
+    const validi = (prelievi ?? []).filter((p) => p?.articolo && Number(p.quantita) > 0);
+    if (!validi.length) throw new Error('Nessun prelievo da registrare');
+    for (const p of validi) if (p.lotto && !p.scadenza) throw new Error(`${p.articolo}: il lotto ${p.lotto} non ha la scadenza`);
+
+    const { document: originale } = await this.http.get(`/sales/${id}/orders`);
+    if (originale.docStatus !== 'CREATED') throw new Error(`L'ordine ${originale.docDescription} è "${originale.docStatusDesc}": il DDT si emette solo per un ordine "Creato"`);
+    const righeOrdine = righeOrdineSpezzate(originale.rows, validi); // errore qui = ancora nulla scritto
+
+    let idDdt = null;
+    let ordineModificato = false;
+    try {
+      await this.http.richiesta('PUT', `/sales/${id}/orders`, { body: corpoOrdineVendita(originale, righeOrdine) });
+      ordineModificato = true;
+      const r = await this.http.post(`/sales/${id}/orderstogoodsissue`, { idNumerator: '1', docDate: String(dataGiobby(this.oggi())), idDocumentTypeExt: '0' });
+      if (!r?.idDocument) throw new Error('Giobby non ha restituito l\'id del DDT creato');
+      idDdt = r.idDocument;
+      const { document: ddtGiobby } = await this.http.get(`/sales/${idDdt}/goodsissue`);
+      const { documento: nuovo, avvisi } = adattaEntrataMerci(ddtGiobby, { righe: validi.map((p) => ({ codice_articolo: p.articolo, quantita: p.quantita, lotto: p.lotto, data_scadenza: p.scadenza })) });
+      const corpo = corpoPerAggiornamento(nuovo);
+      // il riferimento all'ordine (che tiene collegata la riga) non è nei campi scrivibili standard: si rimette a mano
+      corpo.rows.forEach((riga, i) => {
+        if (nuovo.rows[i]?.saleorderref != null) riga.saleorderref = nuovo.rows[i].saleorderref;
+        if (nuovo.rows[i]?.saleorderposref != null) riga.saleorderposref = nuovo.rows[i].saleorderposref;
+      });
+      await this.http.richiesta('PUT', `/sales/${idDdt}/goodsissue`, { body: corpo });
+      const { document: dopo } = await this.http.get(`/sales/${id}/orders`);
+      return { idDdt, riferimento: ddtGiobby.docDescription, statoOrdine: dopo.docStatusDesc, avvisi };
+    } catch (e) {
+      const problemi = [];
+      if (idDdt) { try { await this.http.richiesta('DELETE', `/sales/${idDdt}/goodsissue`); } catch { problemi.push(`DDT ${idDdt} da cancellare a mano in Giobby`); } }
+      if (ordineModificato) {
+        try {
+          const { document: attuale } = await this.http.get(`/sales/${id}/orders`);
+          await this.http.richiesta('PUT', `/sales/${id}/orders`, { body: corpoOrdineVendita(attuale, originale.rows) });
+        } catch { problemi.push(`righe dell'ordine ${originale.docDescription} da controllare in Giobby (erano spezzate per lotto)`); }
+      }
+      if (problemi.length) e.message = `${e.message} — ATTENZIONE: ${problemi.join('; ')}`;
+      throw e;
+    }
+  }
+
   /** Catalogo articoli di Giobby: [{ id, codice (secondario), descrizione, um }]. */
   async prodotti() {
     return catalogo(await this.#elenco('/products', 'products'));
   }
+
   /**
    * Ordini che raccolgono il resto di `ordine` (hanno "ODA n" nei riferimenti interni).
    * L'elenco ordini di Giobby NON riporta i riferimenti interni (internalNote arriva vuoto): si leggono dal dettaglio
@@ -81,6 +189,7 @@ export class ApiGiobby {
     }
     return figli;
   }
+
   async trovaOrdine(ddt) {
     const numeri = new Set((String(ddt.numero_ordine_cliente ?? '').match(/\d+/g) || []).map((n) => String(Number(n))));
     if (!numeri.size) throw new Error('Il DDT non riporta un numero d\'ordine: non so a quale ordine di Giobby agganciare il carico');
@@ -97,7 +206,7 @@ export class ApiGiobby {
     // Ordine chiuso perché il resto arriverà più tardi: il resto è in un nuovo ordine che porta "ODA n" nei riferimenti interni.
     const tutti = this.#ordiniCache ?? [];
     for (let salti = 0; !STATI_ORDINE_APERTO.includes(ordine.docStatus) && salti < 5; salti++) {
-            const figli = await this.#ordiniDelResto(ordine, tutti);
+      const figli = await this.#ordiniDelResto(ordine, tutti);
       // se il resto è già in un ordine aperto, quello; se anche quello è stato chiuso a sua volta, si prosegue lungo la catena
       const successore = figli.find((o) => STATI_ORDINE_APERTO.includes(o.docStatus)) ?? figli.sort((a, b) => Number(b.id) - Number(a.id))[0];
       if (!successore) break;
@@ -278,7 +387,7 @@ export class ApiGiobby {
       entrate.push((await this.http.get(`/purchases/${h.id}/goodsreceipt`)).document);
     }
     const righe = calcolaResiduo(ordine, ricevutoPerOrdine(entrate, ordine.docNumber));
-           const figli = await this.#ordiniDelResto(testata, ordini); // anche se già ricevuto del tutto: serve per dire dove è finito il resto
+    const figli = await this.#ordiniDelResto(testata, ordini); // anche se già ricevuto del tutto: serve per dire dove è finito il resto
     const successore = figli.find((o) => STATI_ORDINE_APERTO.includes(o.docStatus)) ?? [...figli].sort((a, b) => Number(b.id) - Number(a.id))[0];
     return {
       ordine: { id: testata.id, descrizione: testata.docDescription, stato: ordine.docStatus, statoDescrizione: ordine.docStatusDesc },
@@ -309,7 +418,7 @@ export class ApiGiobby {
       await this.http.post('/purchases/orders', corpoOrdineResiduo(ordine, mancanti, { oggi: this.oggi(), consegna }));
       creatoOra = true;
       const dopo = await this.#elenco('/purchases/orders', 'documentsHeaders');
-           const trovati = (await this.#ordiniDelResto(ordine, dopo)).filter((o) => STATI_ORDINE_APERTO.includes(o.docStatus));
+      const trovati = (await this.#ordiniDelResto(ordine, dopo)).filter((o) => STATI_ORDINE_APERTO.includes(o.docStatus));
       nuovo = trovati.sort((a, b) => Number(b.id) - Number(a.id))[0];
       if (!nuovo) throw new Error('Il nuovo ordine è stato creato ma non lo ritrovo in Giobby: controlla a mano (e non chiudere il vecchio)');
     }

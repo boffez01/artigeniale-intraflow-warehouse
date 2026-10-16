@@ -175,7 +175,28 @@ div.err { background: var(--err-bg); border-color: #d33; color: #6e1411; } div.i
 .tipbox { position: fixed; z-index: 100; width: 280px; background: #172230; color: #fff; padding: 10px 12px; border-radius: 10px; font-size: 12.5px; font-weight: 400; line-height: 1.4; box-shadow: 0 6px 20px rgba(8, 24, 40, .35); pointer-events: none; white-space: normal; text-align: left; text-transform: none; letter-spacing: 0; }
 .tipbox b { display: block; margin-bottom: 3px; font-size: 13px; }
 td.abb { min-width: 220px; } td.abb select { min-width: 200px; }
+
 /* ---------- Modulo B (picking) */
 textarea { width: 100%; padding: 10px; border: 1px solid #cbd3dc; border-radius: 8px; font: 12.5px/1.45 ui-monospace, Consolas, monospace; background: #fff; color: var(--ink); resize: vertical; }
 textarea:focus { outline: 2px solid #2f7fc155; border-color: var(--accent); }
 .beta { font-size: 11px; text-transform: uppercase; letter-spacing: .5px; background: var(--warn-bg); color: var(--warn); padding: 2px 8px; border-radius: 9px; vertical-align: middle; margin-left: 6px; }
+
+/* Picking: filtri, stampa per cliente, evidenziazione dei lotti multipli */
+.filtri-picking { display: flex; gap: 14px; flex-wrap: wrap; align-items: flex-end; margin-bottom: 10px; }
+.filtri-picking input[type="date"] { width: auto; }
+details.prova { margin-top: 14px; } details.prova summary { cursor: pointer; color: var(--muted); font-size: 13px; }
+details.prova textarea { margin-top: 8px; }
+.ordine-picking { margin-top: 14px; } .ordine-picking h3 { font-size: 15px; }
+table.picking th, table.picking td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
+table.picking th.diff, table.picking td.diff { width: 28%; border-left: 1px dashed #b8c0ca; }
+table.picking tr.multi td { background: #fff6dc; }
+.multi-tag { margin-left: 6px; }
+@media print {
+  .topbar, .foot, .noprint { display: none !important; }
+  body { background: #fff; font-size: 12.5px; }
+  main { padding: 0; max-width: none; }
+  .card.foglio { box-shadow: none; padding: 0; margin: 0; break-after: page; }
+  table.picking tr.multi td { background: #fff6dc !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  table.picking td.diff { height: 30px; }
+}
+.filtri-picking > div { display: flex; flex-direction: column; gap: 4px; }

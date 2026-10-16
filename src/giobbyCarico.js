@@ -37,7 +37,6 @@ const norm = (s) => String(s ?? '').trim().toUpperCase();
  *  - righe di riferimento/testo (es. "Riferimento a ODA N. 1") restano
  * Ritorna { documento, avvisi, nonCaricate } (nonCaricate = codici del DDT che non si sono potuti abbinare all'ordine). Non modifica l'oggetto ricevuto.
  */
-
 export function adattaEntrataMerci(documento, ddt) {
   const avvisi = [];
   const nonCaricate = [];
@@ -85,6 +84,7 @@ export function adattaEntrataMerci(documento, ddt) {
 
   return { documento: { ...documento, rows: nuove }, avvisi, nonCaricate };
 }
+
 /** Riga di riepilogo leggibile (per i log e per lo script di prova). */
 const dataItaliana = (ms) => new Intl.DateTimeFormat('sv-SE', { timeZone: FUSO }).format(new Date(ms)); // AAAA-MM-GG
 export const descriviRiga = (r) => (r.idPosType === 1
@@ -115,7 +115,6 @@ export function corpoPerAggiornamento(documento) {
 
 /** Data di oggi in Italia come AAAA-MM-GG (la data dell'Entrata Merci è il giorno di arrivo della merce). */
 export const oggiIso = (adesso = new Date()) => new Intl.DateTimeFormat('sv-SE', { timeZone: FUSO }).format(adesso);
-
 // ---------------------------------------------------------------- Consegne parziali (ordine residuo)
 
 /** "ODA N. 6 del 12/10/26", "ODA 6", "oda n°6" -> "6". Null se non c'è un numero d'ordine. */
@@ -181,4 +180,84 @@ export function corpoOrdineResiduo(ordine, residui, { oggi, consegna }) {
     rows.push(riga);
   }
   return { ...base, idBu: ordine.idBu, docDate: dataGiobby(oggi), internalNote: `ODA ${ordine.docNumber}`, rows };
+}
+
+/** Millisecondi di Giobby -> "AAAA-MM-GG" (giorno italiano); null se manca. */
+export const isoDaGiobby = (ms) => (ms ? dataItaliana(Number(ms)) : null);
+
+/**
+ * Giacenze per il picking: report di Giobby (con dettaglio per lotto) + anagrafica lotti (da lì viene la scadenza).
+ * Conta la quantità FISICA in magazzino (quantity): gli ordini di vendita da evadere li legge e li assegna il picking stesso,
+ * quindi togliere anche quelli già impegnati da Giobby (availableQty) vorrebbe dire contarli due volte.
+ * Le righe senza merce (es. solo "ordinato al fornitore") si scartano; un lotto senza anagrafica resta, senza scadenza.
+ * @returns {{articolo:string, lotto:string|null, scadenza:string|null, ubicazione:string|null, magazzino:string|null, disponibile:number}[]}
+ */
+export function giacenzeDaReport(report = [], lotti = []) {
+  const scadenze = new Map(lotti.map((l) => [`${norm(l.idMaterial)}|${norm(l.idLot)}`, l.expireDate]));
+  return report
+    .filter((r) => Number(r.quantity) > 0)
+    .map((r) => ({
+      articolo: norm(r.idMaterial),
+      lotto: String(r.idLot ?? '').trim() || null,
+      scadenza: isoDaGiobby(scadenze.get(`${norm(r.idMaterial)}|${norm(r.idLot)}`)),
+      ubicazione: String(r.idLocation ?? '').trim() || null,
+      magazzino: r.idStorage || null,
+      disponibile: arrotonda(Number(r.quantity)),
+    }));
+}
+
+/**
+ * Ordine di vendita di Giobby (dettaglio) -> ordine per il picking:
+ * { id:'ODV 1', idGiobby, cliente, stato, consegna:'AAAA-MM-GG', righe:[{articolo, descrizione, quantita}] }.
+ * La consegna è la più vicina tra le righe; contano solo le righe merce (idPosType 1) con quantità > 0.
+ */
+export function ordineVenditaPerPicking(doc) {
+  const righe = (doc?.rows ?? []).filter((r) => Number(r.idPosType) === 1 && Number(r.quantity) > 0 && r.idMaterial);
+  const consegne = righe.map((r) => Number(r.deliveryDate)).filter((n) => Number.isFinite(n) && n > 0);
+  return {
+    id: `ODV ${String(doc.docNumber ?? doc.id).trim()}`,
+    idGiobby: doc.id,
+    cliente: doc.companyName || doc.idCustomer || null,
+    stato: doc.docStatusDesc || doc.docStatus || null,
+    consegna: consegne.length ? isoDaGiobby(Math.min(...consegne)) : null,
+    righe: righe.map((r) => ({ articolo: norm(r.idMaterial), descrizione: String(r.description ?? '').trim() || null, quantita: arrotonda(Number(r.quantity)) })),
+  };
+}
+
+// ---------- DDT in uscita (Modulo B) ----------
+const CAMPI_RIGA_ORDINE = ['idPos', 'idMaterial', 'idPosType', 'price', 'quantity', 'dsc1', 'dsc2', 'dsc3', 'dsc4', 'idVat', 'description', 'um', 'idStorage', 'idLocation', 'note', 'deliveryDate'];
+
+/** Corpo del PUT /sales/{id}/orders: testata come l'ha data Giobby, righe indicate (solo campi scrivibili, deliveryDate compresa). */
+export function corpoOrdineVendita(ordine, righe) {
+  const corpo = corpoPerAggiornamento(ordine);
+  corpo.rows = righe.map((r) => {
+    const x = {};
+    for (const k of CAMPI_RIGA_ORDINE) if (r[k] !== undefined && r[k] !== null) x[k] = r[k];
+    return x;
+  });
+  return corpo;
+}
+
+/**
+ * Righe dell'ordine di vendita spezzate per lotto: ogni lotto preso dal magazzino diventa una riga (la prima tiene l'idPos, le altre
+ * ne sono prive e Giobby le numera). Se si preleva meno dell'ordinato, il resto resta in una riga a parte (senza lotto).
+ * @param prelievi [{ articolo, lotto, quantita }]. Un articolo non prelevato resta com'è. Più del richiesto = errore.
+ */
+export function righeOrdineSpezzate(righeOrdine, prelievi) {
+  const out = [];
+  for (const r of righeOrdine) {
+    if (r.idPosType !== 1 || !r.idMaterial) { out.push({ ...r }); continue; }
+    const lotti = prelievi.filter((p) => String(p.articolo).trim().toUpperCase() === String(r.idMaterial).trim().toUpperCase() && Number(p.quantita) > 0);
+    if (!lotti.length) { out.push({ ...r }); continue; }
+    const totale = lotti.reduce((t, p) => t + Number(p.quantita), 0);
+    const ordinata = Number(r.quantity);
+    if (totale > ordinata + 1e-9) throw new Error(`${r.idMaterial}: da prelevare ${arrotonda(totale)} ma l'ordine ne chiede ${arrotonda(ordinata)}`);
+    lotti.forEach((p, k) => {
+      const copia = { ...r, quantity: Number(p.quantita) };
+      if (k > 0) delete copia.idPos;
+      out.push(copia);
+    });
+    if (ordinata - totale > 1e-9) { const resto = { ...r, quantity: arrotonda(ordinata - totale) }; delete resto.idPos; out.push(resto); }
+  }
+  return out;
 }
