@@ -30,7 +30,8 @@ export const api = {
   abbinamento: (id, ddt) => call(`/api/ddt/${id}/abbinamento`, { method: 'POST', body: ddt }),
   pickingGiacenze: () => call('/api/picking/giacenze'),
   pickingOrdini: () => call('/api/picking/ordini'),
-  pickingDdt: (ordine, prelievi) => call('/api/picking/ddt', { method: 'POST', body: { ordine, prelievi } }),
+  pickingDdt: (ordine, prelievi, extra = {}) => call('/api/picking/ddt', { method: 'POST', body: { ordine, prelievi, ...extra } }),
+  pickingStorico: () => call('/api/picking/storico'),
   pickingSimula: (dati) => call('/api/picking/simula', { method: 'POST', body: dati }),
   scarta: (id) => call(`/api/ddt/${id}/scarta`, { method: 'POST' }),
   upload: (file) => {

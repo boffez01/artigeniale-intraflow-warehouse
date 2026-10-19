@@ -83,7 +83,7 @@ test('ordine di vendita -> picking: righe merce, consegna più vicina, niente ri
       { idPosType: 1, idMaterial: 'FAR-009', quantity: 0, deliveryDate: 1792100000000 },
     ],
   });
-  assert.deepEqual(o, { id: 'ODV 1', idGiobby: 1, cliente: 'Cliente X', stato: null, consegna: '2026-10-17', righe: [{ articolo: 'FAR-002', descrizione: null, quantita: 50 }, { articolo: 'FAR-003', descrizione: null, quantita: 10 }] });
+  assert.deepEqual(o, { id: 'ODV 1', idGiobby: 1, cliente: 'Cliente X', stato: null, consegna: '2026-10-17', righe: [{ articolo: 'FAR-002', descrizione: null, quantita: 50, um: null }, { articolo: 'FAR-003', descrizione: null, quantita: 10, um: null }] });
 });
 
 test('ApiGiobby.ordiniVendita: solo ordini aperti, dettaglio per riga, ordinati per consegna', async () => {

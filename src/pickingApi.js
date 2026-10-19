@@ -1,4 +1,6 @@
 // API del Modulo B. Montata da createApp() SOLO se MODULO_B=on nel .env: altrimenti /api/picking risponde 404.
+import fs from 'node:fs';
+import path from 'node:path';
 import express from 'express';
 import { z } from 'zod';
 import { config } from './config.js';
@@ -20,6 +22,11 @@ const Dati = z.object({
   })).max(5000),
   oggi: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
 });
+
+const FILE_STORICO = () => path.join(config.dataDir, 'ddt-uscita-storico.jsonl');
+function registraStorico(voce) {
+  try { fs.appendFileSync(FILE_STORICO(), `${JSON.stringify({ quando: new Date().toISOString(), ...voce })}\n`); } catch { /* lo storico non deve mai bloccare il DDT */ }
+}
 
 export function pickingRouter() {
   const r = express.Router();
@@ -51,6 +58,22 @@ export function pickingRouter() {
       res.status(400).json({ error: e.message });
     }
   });
+  // Storico: cosa prevedeva il picking e cosa è finito nel DDT (ultimi 50)
+  r.get('/storico', (_req, res) => {
+    try {
+      const righe = fs.existsSync(FILE_STORICO()) ? fs.readFileSync(FILE_STORICO(), 'utf8').split('\n').filter(Boolean).slice(-50).map((l) => JSON.parse(l)) : [];
+      res.json({ storico: righe.reverse() });
+    } catch (e) { res.status(500).json({ error: e.message }); }
+  });
+  // PDF del DDT di uscita (quello stampato da Giobby)
+  r.get('/ddt/:id/pdf', async (req, res) => {
+    try {
+      const pdf = await getGiobbyClient().pdfDdtUscita(req.params.id);
+      res.type('application/pdf').set('Content-Disposition', `inline; filename="DDT-${Number(req.params.id)}.pdf"`).send(pdf);
+    } catch (e) {
+      res.status(502).json({ error: e.message || String(e) });
+    }
+  });
   // Back office: emette il DDT in uscita con i lotti indicati (quelli del picking, corretti con le note dell'operatore).
   r.post('/ddt', async (req, res) => {
     const dati = z.object({
@@ -58,10 +81,14 @@ export function pickingRouter() {
       prelievi: z.array(z.object({
         articolo: z.string().min(1), lotto: z.string().nullish(), scadenza: z.string().nullish(), quantita: z.number().positive(),
       })).min(1).max(200),
+      parziale: z.boolean().optional(),
+      previsto: z.array(z.object({ articolo: z.string(), lotto: z.string().nullish(), quantita: z.number() })).max(200).optional(),
     }).safeParse(req.body);
     if (!dati.success) return res.status(400).json({ error: 'Dati non validi', dettaglio: dati.error.issues.slice(0, 5).map((i) => `${i.path.join('.')}: ${i.message}`) });
     try {
-      res.json({ ok: true, ...(await getGiobbyClient().emettiDdtUscita(dati.data.ordine, dati.data.prelievi)) });
+      const esito = await getGiobbyClient().emettiDdtUscita(dati.data.ordine, dati.data.prelievi, { parziale: !!dati.data.parziale });
+      registraStorico({ ordine: dati.data.ordine, ddt: esito.riferimento, idDdt: esito.idDdt, previsto: dati.data.previsto ?? null, effettivo: dati.data.prelievi.map((p) => ({ articolo: p.articolo, lotto: p.lotto ?? null, quantita: p.quantita })), parziale: !!dati.data.parziale });
+      res.json({ ok: true, ...esito });
     } catch (e) {
       res.status(422).json({ ok: false, error: e.message || String(e) });
     }

@@ -220,7 +220,7 @@ export function ordineVenditaPerPicking(doc) {
     cliente: doc.companyName || doc.idCustomer || null,
     stato: doc.docStatusDesc || doc.docStatus || null,
     consegna: consegne.length ? isoDaGiobby(Math.min(...consegne)) : null,
-    righe: righe.map((r) => ({ articolo: norm(r.idMaterial), descrizione: String(r.description ?? '').trim() || null, quantita: arrotonda(Number(r.quantity)) })),
+    righe: righe.map((r) => ({ articolo: norm(r.idMaterial), descrizione: String(r.description ?? '').trim() || null, quantita: arrotonda(Number(r.quantity)), um: String(r.um ?? '').trim().toUpperCase() || null })),
   };
 }
 
@@ -261,3 +261,6 @@ export function righeOrdineSpezzate(righeOrdine, prelievi) {
   }
   return out;
 }
+
+/** Unità di misura che ammettono decimali (peso, volume, lunghezza). Per le altre (pezzi, colli...) le quantità sono intere. */
+export const umDecimale = (um) => !um || /^(KG|KGM|G|GR|L|LT|ML|M|MT|MQ|CM)$/i.test(String(um).trim());

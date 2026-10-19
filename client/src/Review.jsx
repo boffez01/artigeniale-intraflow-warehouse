@@ -27,7 +27,7 @@ export default function Review({ id }) {
   const [err, setErr] = useState('');
   const [dirty, setDirty] = useState(false);
   const [msg, setMsg] = useState('');
-    const [agg, setAgg] = useState(0); // cambia dopo ogni aggiornamento su Giobby: il riquadro «consegna parziale» si ricarica
+  const [agg, setAgg] = useState(0); // cambia dopo ogni aggiornamento su Giobby: il riquadro «consegna parziale» si ricarica
   const [abb, setAbb] = useState(null); // abbinamento righe <-> articoli di Giobby ({attivo, articoli, righe} o {errore})
 
   const applica = useCallback((d) => {
@@ -74,7 +74,7 @@ export default function Review({ id }) {
   const aggiorna = async () => {
     if (!window.confirm('Aggiornare anche l\'Entrata Merci su Giobby con queste modifiche?')) return;
     setBusy(true); setErr(''); setMsg('');
-        try { applica(await api.aggiorna(id, form)); setAgg((n) => n + 1); setMsg('Modifiche salvate e aggiornate su Giobby.'); } catch (e) { setErr(e.message); } finally { setBusy(false); }
+    try { applica(await api.aggiorna(id, form)); setAgg((n) => n + 1); setMsg('Modifiche salvate e aggiornate su Giobby.'); } catch (e) { setErr(e.message); } finally { setBusy(false); }
   };
   const invia = () => esegui(() => api.invia(id, form));
   const scarta = async () => {
@@ -147,18 +147,19 @@ export default function Review({ id }) {
         </div>
 
         <div className="card scroll">
-          <table>
-            <thead><tr><th>Codice</th><th>Descrizione</th><th>Q.tà</th><th>UM</th><th>Lotto</th><th>Scadenza</th>{abbOk && <th>Articolo in Giobby</th>}<th /></tr></thead>
+          <table className="righe-ddt">
+            <thead><tr><th>Codice</th><th>Descrizione</th><th>Q.tà</th><th>UM</th><th>Lotto</th><th>Scadenza</th>{abbOk && <th>Abbinato tramite</th>}{abbOk && <th>Articolo in Giobby</th>}<th /></tr></thead>
             <tbody>
               {form.righe.map((r, i) => (
-                <tr key={i}>
+                <tr key={i} className={abbOk?.righe[i]?.metodo === 'descrizione' ? 'riga-desc' : ''}>
                   {['codice_articolo', 'descrizione', 'quantita', 'unita_misura', 'lotto', 'data_scadenza'].map((c) => (
                     <td key={c}>
-                      <input value={r[c] ?? ''} disabled={!editabile}
+                      <input value={r[c] ?? ''} disabled={!editabile} title={r[c] ?? ''} data-col={c}
                              className={(c === 'lotto' || c === 'data_scadenza') && dubbio(r, c) ? 'dubbio' : ''}
                              onChange={(e) => setRiga(i, c, e.target.value)} />
                     </td>
                   ))}
+                  {abbOk && <td className="via"><Via x={abbOk.righe[i]} articoli={abbOk.articoli} riga={r} /></td>}
                   {abbOk && <td className="abb"><Abbinamento x={abbOk.righe[i]} articoli={abbOk.articoli} riga={r} editabile={editabile} onScegli={(v) => setRiga(i, 'articolo_giobby', v)} /></td>}
                   <td>{editabile && <button className="mini" title="Rimuovi riga"
                         onClick={() => set({ righe: form.righe.filter((_, k) => k !== i) })}>✕</button>}</td>
@@ -171,7 +172,9 @@ export default function Review({ id }) {
           {editabile && <button className="sec" style={{ marginTop: 10 }}
             onClick={() => set({ righe: [...form.righe, { ...RIGA_VUOTA }] })}>+ Aggiungi riga</button>}
         </div>
-                {caricato && <Residuo key={agg} id={det.id} />}
+
+        {caricato && <Residuo key={agg} id={det.id} />}
+
         {caricato && (
           <div className="actions">
             <button disabled={busy || !dirty || daScegliere > 0} onClick={aggiorna}>Salva e aggiorna su Giobby</button>
@@ -211,8 +214,29 @@ function Abbinamento({ x, articoli, riga, editabile, onScegli }) {
   }
   if (x.metodo === 'scelta') return menu;
   return (
-    <Spiega titolo="Articolo riconosciuto" testo={SPIEGA_METODO[x.metodo]}>
-      <span className={`chk ${x.metodo === 'descrizione' ? 'warn' : 'ok'}`}>{x.id} · {x.descrizioneGiobby}</span>
-    </Spiega>
+    <>
+      <Spiega titolo="Articolo riconosciuto" testo={SPIEGA_METODO[x.metodo]}>
+        <span className={`chk ${x.metodo === 'descrizione' ? 'warn' : 'ok'}`}>{x.id} · {x.descrizioneGiobby}</span>
+      </Spiega>
+    </>
+  );
+}
+/** Colonna "Abbinato tramite": con COSA è stato riconosciuto l'articolo (codice fornitore, codice articolo, descrizione, scelta a mano). */
+function Via({ x, articoli, riga }) {
+  if (!x || x.stato === 'vuota') return <span className="muted">—</span>;
+  if (x.stato === 'da_scegliere') return <span className="chk bad">Non riconosciuto</span>;
+  const trovato = articoli.find((a) => a.id === x.id);
+  const m = {
+    codice: ['Codice fornitore', 'ok', riga.codice_articolo],
+    codice_primario: ['Codice articolo', 'ok', riga.codice_articolo],
+    descrizione: ['Descrizione', 'warn', 'il codice non è stato trovato: controlla'],
+    scelta: ['Scelto a mano', 'ok', ''],
+  }[x.metodo] || ['—', '', ''];
+  return (
+    <div className="via-box">
+      <span className={`chk ${m[1]}`}>{m[0]}</span>
+      {m[2] ? <div className="small muted">{m[2]}</div> : null}
+      {trovato?.codice && x.metodo !== 'codice' ? <div className="small muted">cod. forn. Giobby: {trovato.codice}</div> : null}
+    </div>
   );
 }

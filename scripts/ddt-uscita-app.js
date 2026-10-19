@@ -31,7 +31,7 @@ log('Prelievi:', prelievi.map((p) => `${p.articolo} ${p.lotto} ${p.quantita}`).j
 
 let idDdt = null;
 try {
-  const r = await giobby.emettiDdtUscita(ID, prelievi);
+  const r = await giobby.emettiDdtUscita(ID, prelievi, { parziale });
   idDdt = r.idDdt;
   log(`✔ ${r.riferimento} (id ${r.idDdt}) · ordine: ${r.statoOrdine} · avvisi: ${r.avvisi.join('; ') || 'nessuno'}`);
   const { document: d } = await g.get(`/sales/${idDdt}/goodsissue`);

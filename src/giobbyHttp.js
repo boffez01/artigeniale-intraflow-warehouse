@@ -187,6 +187,16 @@ export class GiobbyHttp {
     return json;
   }
 
+  /** Scarica un file binario (es. il PDF di un documento). Ritorna { buffer, tipo }. */
+  async scarica(percorso, query, secondaVolta = false) {
+    const s = await this.#sessioneValida();
+    const qs = query ? `?${new URLSearchParams(query)}` : '';
+    const res = await fetch(`${s.apiUrl}${percorso}${qs}`, { headers: { Accept: '*/*', Authorization: `Bearer ${s.accessToken}`, 'X-Giobby-Realm': this.cfg.giobbyRealm } });
+    if (res.status === 401 && !secondaVolta) { this.sessione = null; return this.scarica(percorso, query, true); }
+    if (!res.ok) throw new GiobbyError(`Giobby GET ${percorso}: HTTP ${res.status}`, { status: res.status });
+    return { buffer: Buffer.from(await res.arrayBuffer()), tipo: res.headers.get('content-type') || '' };
+  }
+
   get = (percorso, query) => this.richiesta('GET', percorso, { query });
   post = (percorso, body) => this.richiesta('POST', percorso, { body });
 }

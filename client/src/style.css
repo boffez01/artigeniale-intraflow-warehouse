@@ -200,3 +200,72 @@ table.picking tr.multi td { background: #fff6dc; }
   table.picking td.diff { height: 30px; }
 }
 .filtri-picking > div { display: flex; flex-direction: column; gap: 4px; }
+
+/* Riquadro colore articolo (picking) */
+.art { display: flex; align-items: center; gap: 10px; }
+.riquadro { display: inline-block; width: 26px; height: 26px; border-radius: 6px; border: 1px solid rgba(0,0,0,.25); flex: none; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+@media print { .nonstampare { display: none !important; } }
+
+/* Come è stato abbinato l'articolo (DDT in entrata) */
+.incrocio { margin-top: 3px; font-size: 11.5px; color: var(--muted, #5b6b7b); }
+.incrocio.warn { color: #8a5a00; }
+
+/* Picking: articolo (madre) e lotti (figlie) */
+table.picking tr.madre td { border-bottom: none; padding-bottom: 2px; }
+table.picking tr.figlia td { padding-top: 3px; padding-bottom: 3px; font-size: 13.5px; }
+table.picking td.ramo { color: #8da0b3; text-align: right; font-family: ui-monospace, monospace; white-space: nowrap; padding-right: 2px; }
+.manca { color: #b45309; font-weight: 600; } .eccesso { color: #c0261d; font-weight: 600; }
+.qmod { display: inline-flex; gap: 6px; align-items: center; }
+.qmod input { width: 5.5em; }
+button.sec.x { padding: 2px 9px; line-height: 1.2; }
+table.picking tr.aggiungi td { padding: 4px 8px 10px 36px; }
+table.picking select { min-width: 17em; }
+.passi { margin-top: 14px; }
+.passi > p { margin: 0 0 8px; }
+table.picking td.ramo { color: #6b7f94; }
+.passi .actions { position: static; background: none; padding: 4px 0 8px; }
+
+/* DDT in entrata: tabella righe più grande e leggibile */
+.split { grid-template-columns: minmax(0, 4fr) minmax(0, 8fr); }
+@media (max-width: 1400px) { .split { grid-template-columns: minmax(0, 5fr) minmax(0, 7fr); } }
+table.righe-ddt { min-width: 900px; font-size: 15px; border-collapse: separate; border-spacing: 0; }
+table.righe-ddt thead th { position: sticky; top: 0; background: #fff; z-index: 2; font-size: 13px; padding: 10px 8px; border-bottom: 2px solid var(--line); text-transform: none; }
+table.righe-ddt td { padding: 8px 6px; vertical-align: top; border-bottom: 1px solid var(--line-2); }
+table.righe-ddt tbody tr:nth-child(even) td { background: #f8fafc; }
+table.righe-ddt tr.riga-desc td { background: #fff7e0; }
+table.righe-ddt input, table.righe-ddt select { font-size: 15px; padding: 9px 10px; width: 100%; min-height: 40px; }
+table.righe-ddt input[data-col="codice_articolo"] { min-width: 130px; }
+table.righe-ddt input[data-col="descrizione"] { min-width: 190px; }
+table.righe-ddt input[data-col="quantita"] { min-width: 76px; text-align: right; }
+table.righe-ddt input[data-col="unita_misura"] { min-width: 60px; }
+table.righe-ddt input[data-col="lotto"] { min-width: 120px; }
+table.righe-ddt input[data-col="data_scadenza"] { min-width: 135px; }
+table.righe-ddt td.abb { min-width: 280px; }
+table.righe-ddt td.abb select { min-width: 270px; }
+
+/* Picking: paletti, riepilogo, tablet, stampa */
+table.picking tr.errore td { background: #fde8e6 !important; }
+.lotti-tag { background: #eef2f6; color: #3b4a59; }
+.lotti-tag.warn { background: var(--warn-bg); color: var(--warn); }
+td.scade { color: #c0261d; font-weight: 600; }
+.fefo { font-size: 11.5px; color: #8a5a00; margin-top: 3px; }
+.solo-stampa { display: none; }
+.riepilogo { border: 2px solid var(--line); border-radius: 12px; padding: 14px 16px; margin-top: 10px; background: #fff; }
+.riepilogo h4 { margin: 0 0 8px; font-size: 16px; }
+.riepilogo .actions { position: static; background: none; padding: 8px 0 0; }
+table.riep { width: 100%; border-collapse: collapse; font-size: 14px; margin: 6px 0; }
+table.riep th, table.riep td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line-2); }
+table.riep tr.manca-r td { background: #fff7e0; }
+label.parz { display: block; background: #fff7e0; border-left: 4px solid #d99a00; padding: 9px 12px; border-radius: 8px; margin: 8px 0; font-weight: 600; }
+div.err ul { margin: 4px 0 0 18px; padding: 0; }
+.tablet table.picking { font-size: 17px; }
+.tablet button { min-height: 48px; font-size: 16px; padding: 10px 20px; }
+.tablet input, .tablet select { min-height: 46px; font-size: 17px; }
+.tablet .riquadro { width: 34px; height: 34px; }
+@media print {
+  .solo-stampa { display: inline; }
+  table.picking tr.errore td { background: none !important; }
+}
+
+table.righe-ddt td.via { min-width: 150px; }
+.chk.bad { background: #fde8e6; color: #b3261e; }

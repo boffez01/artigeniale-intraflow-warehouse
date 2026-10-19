@@ -5,7 +5,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { config } from './config.js';
 import { catalogo, conCodiciGiobby, righeDaScegliere, risolviArticoli } from './articoli.js';
-import { adattaEntrataMerci, calcolaResiduo, corpoOrdineResiduo, corpoOrdineVendita, corpoPerAggiornamento, righeOrdineSpezzate, dataGiobby, giacenzeDaReport, numeroOrdine, oggiIso, ordineVenditaPerPicking, ricevutoPerOrdine } from './giobbyCarico.js';
+import { adattaEntrataMerci, calcolaResiduo, corpoOrdineResiduo, corpoOrdineVendita, corpoPerAggiornamento, righeOrdineSpezzate, umDecimale, dataGiobby, giacenzeDaReport, numeroOrdine, oggiIso, ordineVenditaPerPicking, ricevutoPerOrdine } from './giobbyCarico.js';
 import { GiobbyError, GiobbyHttp } from './giobbyHttp.js';
 
 // Giacenze di prova (stessi articoli del sandbox Giobby) per vedere il picking senza collegamento a Giobby.
@@ -28,10 +28,11 @@ class DryRunGiobby {
   /** Senza collegamento a Giobby: giacenze di prova. */
   async giacenze() { return GIACENZE_PROVA.map((g) => ({ ...g })); }
   /** Senza collegamento a Giobby: ordini di vendita di prova. */
-  async emettiDdtUscita(idGiobby, prelievi) {
+  async emettiDdtUscita(idGiobby, prelievi, { parziale = false } = {}) {
     if (!prelievi?.length) throw new Error('Nessun prelievo da registrare');
     return { idDdt: null, riferimento: `DDT di uscita SIMULATO (ordine ${idGiobby}): nulla è stato scritto in Giobby`, statoOrdine: null, avvisi: [] };
   }
+  async pdfDdtUscita() { throw new Error('Il PDF del DDT si scarica solo con il collegamento a Giobby (GIOBBY_MODE=api)'); }
   async ordiniVendita() { return ORDINI_PROVA.map((o) => ({ ...o, righe: o.righe.map((r) => ({ ...r })) })); }
   async registraCarico(ddt, { chiave } = {}) {
     const ref = `DRY-${new Date().toISOString().replace(/\D/g, '')}-${Math.random().toString(36).slice(2, 6)}`;
@@ -124,7 +125,7 @@ export class ApiGiobby {
    *  1) la riga dell'ordine si spezza in una riga per lotto  2) il DDT si crea dall'ordine  3) i lotti si scrivono riga per riga.
    * Se qualcosa si ferma a metà, il DDT creato si cancella e l'ordine torna com'era. @param prelievi [{ articolo, lotto, scadenza, quantita }]
    */
-  async emettiDdtUscita(idGiobby, prelievi) {
+  async emettiDdtUscita(idGiobby, prelievi, { parziale = false } = {}) {
     const id = Number(idGiobby);
     if (!Number.isInteger(id) || id <= 0) throw new Error('Ordine non valido');
     const validi = (prelievi ?? []).filter((p) => p?.articolo && Number(p.quantita) > 0);
@@ -133,6 +134,7 @@ export class ApiGiobby {
 
     const { document: originale } = await this.http.get(`/sales/${id}/orders`);
     if (originale.docStatus !== 'CREATED') throw new Error(`L'ordine ${originale.docDescription} è "${originale.docStatusDesc}": il DDT si emette solo per un ordine "Creato"`);
+    await this.#controllaPrelievi(originale, validi, { parziale });
     const righeOrdine = righeOrdineSpezzate(originale.rows, validi); // errore qui = ancora nulla scritto
 
     let idDdt = null;
@@ -166,6 +168,55 @@ export class ApiGiobby {
       if (problemi.length) e.message = `${e.message} — ATTENZIONE: ${problemi.join('; ')}`;
       throw e;
     }
+  }
+
+  /** Paletti prima di scrivere in Giobby: solo articoli dell'ordine, quantità valide, lotti esistenti non scaduti e con giacenza (riletta ora). */
+  async #controllaPrelievi(ordine, prelievi, { parziale }) {
+    const n = (x) => String(x ?? '').trim().toUpperCase();
+    const merce = ordine.rows.filter((r) => Number(r.idPosType) === 1 && r.idMaterial);
+    const ordinato = new Map();
+    for (const r of merce) {
+      const o = ordinato.get(n(r.idMaterial)) ?? { quantita: 0, um: r.um };
+      o.quantita += Number(r.quantity) || 0;
+      ordinato.set(n(r.idMaterial), o);
+    }
+    const visti = new Set();
+    for (const p of prelievi) {
+      const art = n(p.articolo);
+      const o = ordinato.get(art);
+      if (!o) throw new Error(`${art} non è nell'ordine ${ordine.docDescription}: non si possono aggiungere prodotti al DDT`);
+      const q = Number(p.quantita);
+      if (!Number.isFinite(q) || q <= 0) throw new Error(`${art}: quantità non valida`);
+      if (!umDecimale(o.um) && !Number.isInteger(q)) throw new Error(`${art}: la quantità deve essere un numero intero (unità ${o.um})`);
+      const chiave = `${art}|${n(p.lotto)}`;
+      if (visti.has(chiave)) throw new Error(`${art}: il lotto ${p.lotto || '(senza lotto)'} è indicato due volte`);
+      visti.add(chiave);
+    }
+    const conLotto = prelievi.filter((p) => p.lotto);
+    if (conLotto.length) {
+      const giac = await this.giacenze();
+      for (const p of conLotto) {
+        const g = giac.find((x) => n(x.articolo) === n(p.articolo) && n(x.lotto) === n(p.lotto));
+        if (!g) throw new Error(`${p.articolo}: il lotto ${p.lotto} non risulta in magazzino`);
+        if (g.scadenza && g.scadenza < this.oggi()) throw new Error(`${p.articolo}: il lotto ${p.lotto} è scaduto il ${g.scadenza}`);
+        if (Number(p.quantita) > g.disponibile + 1e-9) throw new Error(`${p.articolo} lotto ${p.lotto}: ne indichi ${p.quantita} ma in magazzino ce ne sono ${g.disponibile} (la giacenza è cambiata?)`);
+      }
+    }
+    const mancanti = [];
+    for (const [art, o] of ordinato) {
+      const preso = prelievi.filter((p) => n(p.articolo) === art).reduce((t, p) => t + Number(p.quantita), 0);
+      if (preso < o.quantita - 1e-9) mancanti.push(`${art} ${Math.round(preso * 1000) / 1000}/${o.quantita}`);
+    }
+    if (mancanti.length && !parziale) throw new Error(`Consegna parziale (${mancanti.join(', ')}): conferma che il resto resta da evadere`);
+  }
+
+  /** PDF del DDT di uscita, come lo stampa Giobby. @returns {Promise<Buffer>} */
+  async pdfDdtUscita(idDdt) {
+    const id = Number(idDdt);
+    if (!Number.isInteger(id) || id <= 0) throw new Error('DDT non valido');
+    const { buffer } = await this.http.scarica(`/sales/goodsissue/${id}/pdf`, { idDocType: '1' });
+    if (buffer.subarray(0, 4).toString() !== '%PDF') throw new Error('Giobby non ha restituito un PDF');
+    return buffer;
   }
 
   /** Catalogo articoli di Giobby: [{ id, codice (secondario), descrizione, um }]. */
