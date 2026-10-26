@@ -13,6 +13,7 @@ import { DdtSchema } from './schemas.js';
 import { risolviArticoli } from './articoli.js';
 import { getGiobbyClient } from './giobby.js';
 import { pickingRouter } from './pickingApi.js';
+import { installaAuth } from './auth.js';
 
 // Cartella SEPARATA da quella del watcher: altrimenti watcher e web acquisirebbero lo stesso file due volte.
 const upload = multer({
@@ -71,7 +72,7 @@ export function filtri(qs = {}) {
     q: s(qs.q),
     stati: s(qs.stato).split(',').filter((x) => STATI.includes(x)),
     fornitore: s(qs.fornitore),
-        consegna: ['parziale', 'chiusa'].includes(s(qs.consegna)) ? s(qs.consegna) : '',
+    consegna: ['parziale', 'chiusa'].includes(s(qs.consegna)) ? s(qs.consegna) : '',
     da: iso(qs.da),
     a: iso(qs.a),
     sort: s(qs.sort),
@@ -107,9 +108,10 @@ const detail = (row) => ({
   esito: editabile(row) ? valuta(row.payload, row.id).esito : row.warnings,
 });
 
-export function createApp() {
+export function createApp({ auth = config.auth } = {}) {
   const app = express();
   app.use(express.json({ limit: '1mb' }));
+  if (auth) installaAuth(app); // login obbligatorio su tutta /api (tranne /api/auth/login)
 
   // Stato del sistema per la barra in alto del front office (nessun segreto: solo modalità e se la chiave c'è).
   app.get('/api/info', (_req, res) =>
@@ -182,6 +184,7 @@ export function createApp() {
       res.status(out.ok ? 200 : 422).json({ ok: out.ok, ...detail(fresh), esito: out.esito });
     } catch (e) { next(e); }
   });
+
   // Correzione di un DDT già caricato: aggiorna la scheda e l'Entrata Merci in Giobby (se Giobby rifiuta, non cambia nulla).
   app.post('/api/ddt/:id/aggiorna', load, async (req, res, next) => {
     try {
@@ -193,7 +196,8 @@ export function createApp() {
       res.json({ ok: true, ...detail(db.get(row.id)) });
     } catch (e) { next(e); }
   });
-    // Consegne parziali: cosa manca all'ordine di un DDT caricato, e (se il resto non arriva) chiusura dell'ordine + nuovo ordine per il resto.
+
+  // Consegne parziali: cosa manca all'ordine di un DDT caricato, e (se il resto non arriva) chiusura dell'ordine + nuovo ordine per il resto.
   app.get('/api/ddt/:id/residuo', load, async (req, res) => {
     const { row } = req;
     if (row.status !== 'caricato') return res.status(409).json({ error: 'Il DDT non è ancora caricato su Giobby' });
@@ -212,6 +216,7 @@ export function createApp() {
       res.json({ ok: true, ...out.esito });
     } catch (e) { next(e); }
   });
+
   app.post('/api/ddt/:id/scarta', load, (req, res) => {
     if (!scarta(req.row)) return res.status(409).json({ error: 'DDT non scartabile in questo stato' });
     res.json(detail(db.get(req.row.id)));

@@ -1,4 +1,5 @@
-import { Fragment, useEffect, useMemo, useState } from 'react';
+import { Fragment, useCallback, useEffect, useMemo, useState } from 'react';
+import Icon from './Icons.jsx';
 import { api } from './api.js';
 import { fmtData } from './format.js';
 import { Spiega } from './Tag.jsx';
@@ -33,6 +34,10 @@ const SP = {
   stato: ['Stato ordine', 'Lo stato dell\'ordine in Giobby: «Creato» = ancora da spedire, «Merce parzialmente spedita» = spedito solo in parte.'],
   dal: ['Consegna dal', 'Solo gli ordini con data di consegna da questo giorno in poi. Lascia vuoto per non limitare.'],
   al: ['Consegna al', 'Solo gli ordini con data di consegna fino a questo giorno. Lascia vuoto per non limitare.'],
+  prov: ['Provincia', 'Utile per i giri di consegna: scegli le province del tuo giro (es. Brescia e Bergamo) e poi spunta tutti gli ordini.'],
+  massiva: ['Elaborazione massiva', 'Spunta uno o più ordini e premi: il programma calcola i lotti per tutti insieme (chi consegna prima prende i lotti che scadono prima) e prepara un foglio separato per ogni cliente.'],
+  singola: ['Elaborazione singola', 'Per le urgenze: spunta UN solo ordine e scegli quali articoli (e quante unità) spedire adesso, per esempio solo il destrosio con il corriere. Il resto dell\'ordine resta da evadere.'],
+  rilascia: ['Rilascia al magazzino', 'Il foglio compare nella pagina «Magazzino» del magazziniere, che lo stampa e prepara la merce. Finché non lo rilasci, in magazzino non lo vede nessuno.'],
   crea: ['Crea stampa picking', 'Calcola da quali lotti prendere la merce (prima quelli che scadono prima) per gli ordini filtrati e prepara i fogli da stampare. Non modifica nulla in Giobby.'],
   rileggi: ['Rileggi da Giobby', 'Rilegge ordini e giacenze aggiornati da Giobby. Usalo se sono arrivati nuovi ordini o la merce è cambiata.'],
   tablet: ['Modalità tablet', 'Ingrandisce pulsanti, campi e testo per usare il programma con le dita su tablet.'],
@@ -47,13 +52,14 @@ const SP = {
   multi: ['Più lotti', 'Questo articolo si prende da più lotti: attenzione a non mescolarli, perché il DDT riporta ogni lotto.'],
 };
 const COL = {
+  Descrizione: 'Descrizione dell\'articolo: serve per non confondere articoli con codici simili.',
   Articolo: 'Il codice e la descrizione dell\'articolo da preparare.',
   Lotto: 'Il lotto da cui prendere la merce: è quello che scade per primo.',
   Scadenza: 'Data di scadenza del lotto.',
   Ubicazione: 'Dove si trova la merce in magazzino (se indicata in Giobby).',
   'Q.tà': 'Nella riga dell\'articolo: quantità richiesta dall\'ordine. Nelle righe dei lotti: quanta ne prendi da quel lotto. Se non coincidono compare «/ richiesta».',
   'Preparato / differenze': 'Spazio per l\'operatore: scrive a penna cosa ha preparato davvero e le differenze (mancanze, lotti diversi).',
-  Giacenza: 'Quanti ce ne sono in magazzino: nella riga del lotto la giacenza di quel lotto, nella riga dell\'articolo il totale di tutti i lotti.',
+  Giacenza: 'Quanti ce ne sono in magazzino. Nella riga dell\'articolo c\'è il TOTALE di tutti i lotti (anche quelli non usati in questo ordine, per questo non è la somma dei lotti sotto); nella riga di ogni lotto, la giacenza di quel lotto.',
 };
 // Riquadro colore per riconoscere a colpo d'occhio articoli simili (es. base e premium). Il colore dipende solo dal codice articolo:
 // lo stesso articolo ha sempre lo stesso colore. Quando Giobby avrà immagini o colori per articolo si useranno quelli.
@@ -67,31 +73,45 @@ const Riquadro = ({ articolo }) => <Spiega titolo="Colore articolo" testo={`Il r
 const Th = ({ nome, className }) => <th className={className}><Spiega titolo={nome} testo={COL[nome]}>{nome}</Spiega></th>;
 const Etichetta = ({ chiave, children }) => <Spiega titolo={SP[chiave][0]} testo={SP[chiave][1]}>{children}</Spiega>;
 
+// Lo stato della pagina resta in memoria quando si passa a un'altra pagina (es. Magazzino) e si torna: filtri, spunte, fogli calcolati,
+// modifiche non ancora confermate. Si azzera solo ricaricando la pagina del browser.
+const MEM = {};
+function useMem(chiave, iniziale) {
+  const [v, setV] = useState(() => (chiave in MEM ? MEM[chiave] : typeof iniziale === 'function' ? iniziale() : iniziale));
+  const set = useCallback((x) => setV((prec) => { const n = typeof x === 'function' ? x(prec) : x; MEM[chiave] = n; return n; }), [chiave]);
+  return [v, set];
+}
 const UM_DEC = /^(KG|KGM|G|GR|L|LT|ML|M|MT|MQ|CM)$/i;
 const unici = (lista) => [...new Set(lista.filter(Boolean))].sort((a, b) => String(a).localeCompare(String(b), 'it'));
 
 export default function Picking() {
-  const [dati, setDati] = useState(null); // { ordini, giacenze } letti da Giobby (o di prova)
-  const [fonte, setFonte] = useState(null); // 'giobby' | 'prova'
-  const [caricamento, setCaricamento] = useState(true);
+  const [vista, setVista] = useMem('vista', 'aperti'); // aperti | da_lavorare | rilasciato | preparato | evasi
+  const [evasi, setEvasi] = useMem('evasi', null);
+  const [dati, setDati] = useMem('dati', null); // { ordini, giacenze } letti da Giobby (o di prova)
+  const [fonte, setFonte] = useMem('fonte', null); // 'giobby' | 'prova'
+  const [caricamento, setCaricamento] = useState(!MEM.dati);
   const [err, setErr] = useState('');
-  const [cliente, setCliente] = useState('');
-  const [stato, setStato] = useState('');
-  const [da, setDa] = useState('');
-  const [a, setA] = useState('');
-  const [esito, setEsito] = useState(null);
+  const [cliente, setCliente] = useMem('cliente', '');
+  const [stato, setStato] = useMem('stato', '');
+  const [da, setDa] = useMem('da', '');
+  const [a, setA] = useMem('a', '');
+  const [esito, setEsito] = useMem('esito', null);
   const [busy, setBusy] = useState(false);
-  const [righeOrd, setRigheOrd] = useState({}); // ordine -> righe lotto [{ articolo, lotto, scadenza, ubicazione, quantita }] (modificabili)
-  const [avvisi, setAvvisi] = useState({}); // ordine -> messaggio per l'operatore
-  const [stampati, setStampati] = useState(() => new Set()); // clienti di cui il foglio è stato stampato
-  const [inModifica, setInModifica] = useState(() => new Set()); // ordini di cui il back office sta correggendo le quantità
-  const [riepilogo, setRiepilogo] = useState(null); // ordine di cui si sta controllando il riepilogo prima del DDT
-  const [parzialeOk, setParzialeOk] = useState({}); // ordine -> spuntato «il resto resta da evadere»
-  const [tablet, setTablet] = useState(false);
-  const [storico, setStorico] = useState(null);
+  const [righeOrd, setRigheOrd] = useMem('righeOrd', {}); // ordine -> righe lotto [{ articolo, lotto, scadenza, ubicazione, quantita }] (modificabili)
+  const [avvisi, setAvvisi] = useMem('avvisi', {}); // ordine -> messaggio per l'operatore
+  const [stampati, setStampati] = useMem('stampati', () => new Set()); // clienti di cui il foglio è stato stampato
+  const [inModifica, setInModifica] = useMem('inModifica', () => new Set()); // ordini di cui il back office sta correggendo le quantità
+  const [prov, setProv] = useMem('prov', '');
+  const [sel, setSel] = useMem('sel', () => new Set()); // ordini spuntati nell'elenco
+  const [singolo, setSingolo] = useMem('singolo', null); // { id, articoli: { codice: { on, qta } } } scelta articoli per l'urgenza
+  const [rilasci, setRilasci] = useMem('rilasci', {}); // ordine -> rilascio al magazzino (stato, nota)
+  const [riepilogo, setRiepilogo] = useMem('riepilogo', null); // ordine di cui si sta controllando il riepilogo prima del DDT
+  const [parzialeOk, setParzialeOk] = useMem('parzialeOk', {}); // ordine -> spuntato «il resto resta da evadere»
+  const [tablet, setTablet] = useMem('tablet', false);
+  const [storico, setStorico] = useMem('storico', null);
   const [soloStampa, setSoloStampa] = useState(null); // cliente di cui si stampa solo il foglio
-  const [ddtFatti, setDdtFatti] = useState({}); // ordine -> esito dell'emissione { ok, testo }
-  const [testoProva, setTestoProva] = useState(() => JSON.stringify(ESEMPIO, null, 2));
+  const [ddtFatti, setDdtFatti] = useMem('ddtFatti', {}); // ordine -> esito dell'emissione { ok, testo }
+  const [testoProva, setTestoProva] = useMem('testoProva', () => JSON.stringify(ESEMPIO, null, 2));
 
   async function carica() {
     setErr(''); setCaricamento(true); setEsito(null);
@@ -104,7 +124,11 @@ export default function Picking() {
       setErr(e.message);
     } finally { setCaricamento(false); }
   }
-  useEffect(() => { carica(); }, []);
+  const leggiRilasci = () => api.pickingRilasci().then((r) => setRilasci(Object.fromEntries((r.rilasci ?? []).map((x) => [x.id, x])))).catch(() => {});
+  const leggiEvasi = () => api.pickingEvasi().then((r) => setEvasi(r.ordini)).catch(() => setEvasi([]));
+  const leggiStorico = () => api.pickingStorico().then((r) => setStorico(r.storico)).catch(() => setStorico([]));
+  // Tornando sulla pagina i dati già letti restano; si rileggono solo rilasci (li cambia il magazzino), evasi e storico.
+  useEffect(() => { if (!MEM.dati) carica(); leggiRilasci(); leggiEvasi(); leggiStorico(); }, []);
 
   function applicaProva() {
     try {
@@ -118,25 +142,69 @@ export default function Picking() {
 
   const ordini = dati?.ordini ?? [];
   const clienti = useMemo(() => unici(ordini.map((o) => o.cliente)), [ordini]);
+  const province = useMemo(() => unici(ordini.map((o) => o.provincia)), [ordini]);
   const stati = useMemo(() => unici(ordini.map((o) => o.stato)), [ordini]);
+  const fase = (o) => (['preparato', 'verificato'].includes(rilasci[o.id]?.stato) ? 'preparato' : rilasci[o.id] ? 'rilasciato' : 'da_lavorare');
   const filtrati = useMemo(() => ordini.filter((o) =>
-    (!cliente || o.cliente === cliente)
+    (vista === 'aperti' || vista === 'evasi' || fase(o) === vista)
+    && (!cliente || o.cliente === cliente)
+    && (!prov || o.provincia === prov)
     && (!stato || o.stato === stato)
     && (!da || (o.consegna && o.consegna >= da))
-    && (!a || (o.consegna && o.consegna <= a))), [ordini, cliente, stato, da, a]);
+    && (!a || (o.consegna && o.consegna <= a))), [ordini, cliente, prov, stato, da, a, vista, rilasci]);
+  const conteggi = useMemo(() => ({ aperti: ordini.length, da_lavorare: ordini.filter((o) => fase(o) === 'da_lavorare').length, rilasciato: ordini.filter((o) => fase(o) === 'rilasciato').length, preparato: ordini.filter((o) => fase(o) === 'preparato').length }), [ordini, rilasci]);
+  const evasiFiltrati = (evasi ?? []).filter((o) => (!cliente || o.cliente === cliente) && (!prov || o.provincia === prov));
+  const ddtDi = (o) => (storico ?? []).find((v) => v.idDdt && String(v.ordine) === String(o.idGiobby));
 
-  async function creaStampa() {
+  // Elabora gli ordini spuntati. Si calcola su TUTTI gli ordini da evadere (chi consegna prima si prende i lotti che scadono
+  // prima, anche se non è spuntato) e si stampano solo quelli scelti: due stampe diverse non promettono lo stesso lotto.
+  // Elaborazione singola (urgenza): si calcola solo su quell'ordine e solo sugli articoli scelti, con la merce davvero in magazzino adesso.
+  async function creaStampa(scelta) {
     setErr(''); setBusy(true);
     try {
-      // Si calcola su TUTTI gli ordini da evadere (chi consegna prima si prende i lotti che scadono prima),
-      // poi si stampano solo quelli scelti coi filtri: così due stampe diverse non promettono lo stesso lotto.
-      const piano = await api.pickingSimula({ ordini: ordini.map((o) => ({ id: o.id, consegna: o.consegna, righe: o.righe.map((r) => ({ articolo: r.articolo, quantita: r.quantita })) })), giacenze: dati.giacenze });
-      setEsito({ piano, scelti: new Set(filtrati.map((o) => o.id)), generata: new Date() });
+      const comeRighe = (o) => o.righe.map((r) => ({ articolo: r.articolo, quantita: r.quantita }));
+      let daCalcolare; let scelti; let target = {};
+      if (scelta) {
+        const o = ordini.find((x) => x.id === scelta.id);
+        const righe = o.righe.filter((r) => scelta.articoli[r.articolo]?.on).map((r) => ({ articolo: r.articolo, quantita: Math.min(Number(scelta.articoli[r.articolo].qta) || 0, r.quantita) })).filter((r) => r.quantita > 0);
+        if (!righe.length) throw new Error('Scegli almeno un articolo con quantità maggiore di zero');
+        daCalcolare = [{ id: o.id, consegna: o.consegna, righe }]; scelti = new Set([o.id]);
+        target = { [o.id]: Object.fromEntries(righe.map((r) => [r.articolo, r.quantita])) };
+      } else {
+        const ids = new Set([...sel].filter((id) => filtrati.some((o) => o.id === id)));
+        if (!ids.size) throw new Error('Spunta almeno un ordine nell\'elenco');
+        daCalcolare = ordini.map((o) => ({ id: o.id, consegna: o.consegna, righe: comeRighe(o) })); scelti = ids;
+      }
+      const piano = await api.pickingSimula({ ordini: daCalcolare, giacenze: dati.giacenze });
+      setEsito({ piano, scelti, target, generata: new Date() });
       setRigheOrd(Object.fromEntries(piano.ordini.map((o) => [o.id, o.prelievi.map((p) => ({ articolo: p.articolo, lotto: p.lotto || null, scadenza: p.scadenza || null, ubicazione: p.ubicazione || null, quantita: p.quantita }))])));
-      setInModifica(new Set()); setAvvisi({});
+      setInModifica(new Set()); setAvvisi({}); setSingolo(null);
     } catch (e) {
       setEsito(null); setErr(e.message);
     } finally { setBusy(false); }
+  }
+
+  const spunta = (id) => setSel((x) => { const n = new Set(x); if (n.has(id)) n.delete(id); else n.add(id); return n; });
+  const tuttiSpuntati = filtrati.length > 0 && filtrati.every((o) => sel.has(o.id));
+  function apriSingola() {
+    const id = [...sel].find((x) => filtrati.some((o) => o.id === x));
+    const o = ordini.find((x) => x.id === id);
+    setSingolo({ id, articoli: Object.fromEntries(o.righe.map((r) => [r.articolo, { on: true, qta: r.quantita }])) });
+  }
+
+  async function rilascia(fogliDaRilasciare) {
+    const info = new Map(ordini.map((o) => [o.id, o]));
+    const lista = fogliDaRilasciare.flatMap((f) => f.ordini).filter((o) => righeDi(o).some((r) => Number(r.quantita) > 0)).map((o) => ({
+      id: o.id, idGiobby: info.get(o.id)?.idGiobby ?? null, cliente: info.get(o.id)?.cliente || 'Cliente non indicato', provincia: info.get(o.id)?.provincia ?? null, consegna: o.consegna ?? null,
+      righe: righeDi(o).filter((r) => Number(r.quantita) > 0).map((r) => ({ articolo: r.articolo, descrizione: o.descrizioni.get(r.articolo) ?? null, lotto: r.lotto || null, scadenza: r.scadenza || null, ubicazione: r.ubicazione || null, quantita: Number(r.quantita) })),
+    }));
+    if (!lista.length) return;
+    setBusy(true);
+    try {
+      await api.pickingRilascia(lista);
+      setStampati((x) => { const n = new Set(x); fogliDaRilasciare.forEach((f) => n.add(f.cliente)); return n; });
+      await leggiRilasci();
+    } catch (e) { setErr(e.message); } finally { setBusy(false); }
   }
 
   function stampaFoglio(cliente) {
@@ -237,7 +305,7 @@ export default function Picking() {
     try {
       const r = await api.pickingDdt(o.idGiobby, prelievi, { parziale: !!parzialeOk[o.id], previsto });
       setDdtFatti((x) => ({ ...x, [o.id]: r.ok ? { ok: true, idDdt: r.idDdt, testo: `${r.riferimento} emesso · ordine ${r.statoOrdine || ''}${r.avvisi?.length ? ` · ${r.avvisi.join('; ')}` : ''}` } : { ok: false, testo: r.error } }));
-      if (r.ok) { setRiepilogo(null); setStorico(null); }
+      if (r.ok) { setRiepilogo(null); leggiStorico(); leggiRilasci(); leggiEvasi(); }
     } catch (e) {
       setDdtFatti((x) => ({ ...x, [o.id]: { ok: false, testo: e.message } }));
       setRiepilogo(null);
@@ -295,10 +363,11 @@ export default function Picking() {
       if (!esito.scelti.has(o.id)) continue;
       const nome = info.get(o.id)?.cliente || 'Cliente non indicato';
       if (!perCliente.has(nome)) perCliente.set(nome, []);
-      perCliente.get(nome).push({ ...o, idGiobby: info.get(o.id)?.idGiobby, ordinati: (info.get(o.id)?.righe ?? []).reduce((m, r) => m.set(r.articolo, (m.get(r.articolo) || 0) + Number(r.quantita || 0)), new Map()), descrizioni: new Map((info.get(o.id)?.righe ?? []).map((r) => [r.articolo, r.descrizione])), ums: new Map((info.get(o.id)?.righe ?? []).map((r) => [r.articolo, r.um])) });
+      perCliente.get(nome).push({ ...o, provincia: info.get(o.id)?.provincia, richiesti: esito.target?.[o.id], idGiobby: info.get(o.id)?.idGiobby, ordinati: (info.get(o.id)?.righe ?? []).reduce((m, r) => m.set(r.articolo, (m.get(r.articolo) || 0) + Number(r.quantita || 0)), new Map()), descrizioni: new Map((info.get(o.id)?.righe ?? []).map((r) => [r.articolo, r.descrizione])), ums: new Map((info.get(o.id)?.righe ?? []).map((r) => [r.articolo, r.um])) });
     }
     return [...perCliente.entries()].sort((x, y) => x[0].localeCompare(y[0], 'it')).map(([nome, lista]) => ({ cliente: nome, ordini: lista.sort((x, y) => String(x.consegna || '9').localeCompare(String(y.consegna || '9'))) }));
   }, [esito, ordini]);
+  const richiesto = (o, art) => o.richiesti?.[art] ?? o.ordinati.get(art);
 
   const fonteTesto = fonte === 'giobby' ? 'Dati letti da Giobby' : 'Dati di prova (collegamento a Giobby spento o dati scritti a mano)';
 
@@ -311,6 +380,15 @@ export default function Picking() {
         </div>
       </div>
 
+      <section className="kpis noprint">
+        {[['aperti', 'Tutti gli ordini', 'list', '', 'tutti quelli ancora aperti'], ['da_lavorare', 'Da evadere', 'inbox', 'warn', 'ancora da passare al magazzino'], ['rilasciato', 'Rilasciati', 'package', 'info', 'al magazzino, da preparare'], ['preparato', 'Preparati', 'check', 'ok', 'da verificare e poi evadere'], ['evasi', 'Evasi', 'check', '', 'cronologia ordini già evasi']].map(([k, tit, ico, tono, nota]) => (
+          <button type="button" key={k} className={`kpi ${tono} ${vista === k ? 'attivo' : ''}`} onClick={() => setVista(k)}>
+            <span className="kpi-ico"><Icon n={ico} size={22} /></span>
+            <span className="kpi-body"><span className="kpi-val">{k === 'evasi' ? (evasi ? evasi.length : '–') : conteggi[k]}</span><span className="kpi-tit">{tit}</span><span className="kpi-nota">{nota}</span></span>
+          </button>
+        ))}
+      </section>
+
       <div className="card noprint">
         {caricamento && <p className="muted">Leggo ordini e giacenze da Giobby…</p>}
         {!caricamento && dati && (
@@ -321,6 +399,11 @@ export default function Picking() {
                   <option value="">Tutti</option>
                   {clienti.map((c) => <option key={c} value={c}>{c}</option>)}
                 </select></div>
+              <div><label><Etichetta chiave="prov">Provincia</Etichetta></label>
+                <select value={prov} onChange={(e) => setProv(e.target.value)}>
+                  <option value="">Tutte</option>
+                  {province.map((c) => <option key={c} value={c}>{c}</option>)}
+                </select></div>
               <div><label><Etichetta chiave="stato">Stato ordine</Etichetta></label>
                 <select value={stato} onChange={(e) => setStato(e.target.value)}>
                   <option value="">Tutti</option>
@@ -329,13 +412,93 @@ export default function Picking() {
               <div><label><Etichetta chiave="dal">Consegna dal</Etichetta></label><input type="date" value={da} onChange={(e) => setDa(e.target.value)} /></div>
               <div><label><Etichetta chiave="al">al</Etichetta></label><input type="date" value={a} onChange={(e) => setA(e.target.value)} /></div>
             </div>
-            <p className="muted small">{fonteTesto}: {filtrati.length} ordini da evadere con questi filtri (su {ordini.length}), {dati.giacenze.length} lotti in magazzino.</p>
-            <div className="actions">
-              <Etichetta chiave="crea"><button disabled={busy || !filtrati.length} onClick={creaStampa}>Crea stampa picking</button></Etichetta>
-              <Etichetta chiave="rileggi"><button className="sec" disabled={busy || caricamento} onClick={carica}>Rileggi da Giobby</button></Etichetta>
-              <Etichetta chiave="tablet"><button className={tablet ? '' : 'sec'} onClick={() => setTablet((t) => !t)}>📱 Modalità tablet {tablet ? 'attiva' : ''}</button></Etichetta>
-              {esito && <Etichetta chiave="stampa"><button className="sec" onClick={() => { setStampati(new Set(fogli.map((f) => f.cliente))); window.print(); }}>Stampa</button></Etichetta>}
+            {vista === 'evasi' ? (
+              <>
+                <p className="muted small">Ordini già evasi, in sola lettura ({evasiFiltrati.length}). Per quelli evasi da questa app c'è il PDF del DDT.</p>
+                <div className="tab-scroll">
+                  <table className="ordini-elenco">
+                    <thead><tr><th>Ordine</th><th>Data</th><th>Cliente</th><th>Prov.</th><th>Stato</th><th>DDT</th></tr></thead>
+                    <tbody>
+                      {evasi === null && <tr><td colSpan={6} className="muted">Leggo gli ordini usciti…</td></tr>}
+                      {evasiFiltrati.map((o) => {
+                        const v = ddtDi(o);
+                        return (
+                          <tr key={o.id} style={{ cursor: 'default' }}>
+                            <td><b>{o.id}</b></td><td>{o.data ? fmtData(o.data) : '—'}</td><td>{o.cliente}</td><td>{o.provincia || '—'}</td><td><span className="chk ok">{o.stato}</span></td>
+                            <td>{v ? <a href={`/api/picking/ddt/${v.idDdt}/pdf`} target="_blank" rel="noreferrer">{v.ddt || 'PDF del DDT'}</a> : '—'}</td>
+                          </tr>
+                        );
+                      })}
+                      {evasi && !evasiFiltrati.length && <tr><td colSpan={6} className="muted">Nessun ordine uscito.</td></tr>}
+                    </tbody>
+                  </table>
+                </div>
+              </>
+            ) : (
+              <>
+            <p className="muted small">{fonteTesto}: {filtrati.length} ordini da evadere con questi filtri (su {ordini.length}), {dati.giacenze.length} lotti in magazzino. Spunta gli ordini da preparare.</p>
+            <div className="tab-scroll">
+              <table className="ordini-elenco">
+                <thead><tr>
+                  <th><input type="checkbox" checked={tuttiSpuntati} onChange={() => setSel(tuttiSpuntati ? new Set() : new Set(filtrati.map((o) => o.id)))} title="Spunta tutti" /></th>
+                  <th>Ordine</th><th>Consegna</th><th>Cliente</th><th>Prov.</th><th>Articoli</th><th>Stato</th><th></th>
+                </tr></thead>
+                <tbody>
+                  {filtrati.map((o) => (
+                    <tr key={o.id} className={sel.has(o.id) ? 'sel' : ''} onClick={() => spunta(o.id)}>
+                      <td onClick={(e) => e.stopPropagation()}><input type="checkbox" checked={sel.has(o.id)} onChange={() => spunta(o.id)} /></td>
+                      <td><b>{o.id}</b></td>
+                      <td className={o.consegna && o.consegna < oggi ? 'scade' : ''}>{o.consegna ? fmtData(o.consegna) : '—'}</td>
+                      <td>{o.cliente}</td>
+                      <td>{o.provincia || '—'}</td>
+                      <td title={o.righe.map((r) => `${r.articolo} ${r.descrizione || ''} × ${r.quantita}`).join('\n')}>{o.righe.length}</td>
+                      <td>{o.stato}</td>
+                      <td><span className={`chk ${fase(o) === 'preparato' ? 'ok' : fase(o) === 'rilasciato' ? 'warn' : ''}`}>{rilasci[o.id]?.stato === 'verificato' ? '🔒 Verificato' : fase(o) === 'preparato' ? 'Preparato: da verificare' : fase(o) === 'rilasciato' ? 'Rilasciato al magazzino' : 'Da evadere'}</span></td>
+                    </tr>
+                  ))}
+                  {!filtrati.length && <tr><td colSpan={8} className="muted">Nessun ordine con questi filtri.</td></tr>}
+                </tbody>
+              </table>
             </div>
+            <div className="actions">
+              <Etichetta chiave="massiva"><button disabled={busy || ![...sel].some((id) => filtrati.some((o) => o.id === id))} onClick={() => creaStampa()}>Elaborazione massiva ({[...sel].filter((id) => filtrati.some((o) => o.id === id)).length} spuntati)</button></Etichetta>
+              <Etichetta chiave="singola"><button className="sec" disabled={busy || [...sel].filter((id) => filtrati.some((o) => o.id === id)).length !== 1} onClick={apriSingola}>Elaborazione singola (urgenza)…</button></Etichetta>
+              <Etichetta chiave="rileggi"><button className="sec" disabled={busy || caricamento} onClick={() => { carica(); leggiRilasci(); leggiEvasi(); leggiStorico(); }}>Rileggi da Giobby</button></Etichetta>
+              <Etichetta chiave="tablet"><button className={tablet ? '' : 'sec'} onClick={() => setTablet((t) => !t)}>📱 Modalità tablet {tablet ? 'attiva' : ''}</button></Etichetta>
+              {esito && <Etichetta chiave="stampa"><button className="sec" onClick={() => { setStampati(new Set(fogli.map((f) => f.cliente))); window.print(); }}>Stampa tutti i fogli</button></Etichetta>}
+            </div>
+            {singolo && (() => {
+              const o = ordini.find((x) => x.id === singolo.id);
+              return (
+                <div className="riepilogo">
+                  <h4>Elaborazione singola · {o.id} · {o.cliente}</h4>
+                  <p className="muted small">Scegli cosa spedire adesso. Quello che non spunti (o le unità in meno) resta da evadere sull'ordine. I lotti si calcolano sulla merce che c'è in magazzino ora.</p>
+                  <table className="riep">
+                    <thead><tr><th></th><th>Articolo</th><th>Descrizione</th><th>Ordinato</th><th>Da spedire ora</th></tr></thead>
+                    <tbody>
+                      {o.righe.map((r) => {
+                        const v = singolo.articoli[r.articolo] || { on: false, qta: 0 };
+                        const dec = decOk(r.um);
+                        return (
+                          <tr key={r.articolo}>
+                            <td><input type="checkbox" checked={v.on} onChange={(e) => setSingolo((x) => ({ ...x, articoli: { ...x.articoli, [r.articolo]: { ...v, on: e.target.checked } } }))} /></td>
+                            <td><b>{r.articolo}</b></td><td>{r.descrizione || '—'}</td><td>{r.quantita}</td>
+                            <td><input type="number" min="0" max={r.quantita} step={dec ? 'any' : 1} disabled={!v.on} value={v.qta} style={{ width: '7em' }}
+                              onChange={(e) => { let q = Number(e.target.value); if (!Number.isFinite(q) || q < 0) q = 0; if (q > r.quantita) q = r.quantita; if (!dec) q = Math.round(q); setSingolo((x) => ({ ...x, articoli: { ...x.articoli, [r.articolo]: { ...v, qta: q } } })); }} /></td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                  <div className="actions">
+                    <button disabled={busy} onClick={() => creaStampa(singolo)}>Crea il foglio con questi articoli</button>
+                    <button className="sec" onClick={() => setSingolo(null)}>Annulla</button>
+                  </div>
+                </div>
+              );
+            })()}
+              </>
+            )}
           </>
         )}
         {err && <div className="err">{err}</div>}
@@ -358,7 +521,7 @@ export default function Picking() {
           <div className="review-title">
             <h2>Picking · {f.cliente}</h2>
             <span className="muted small">stampato il {esito.generata.toLocaleString('it-IT', { dateStyle: 'short', timeStyle: 'short' })}</span>
-            <span className="noprint"><Etichetta chiave="stampaFoglio"><button className="sec" onClick={() => stampaFoglio(f.cliente)}>{f.ordini.some((x) => modificato(x)) ? '🖨 Stampa il foglio aggiornato' : '🖨 Stampa questo foglio'}</button></Etichetta></span>
+            <span className="noprint"><Etichetta chiave="rilascia"><button disabled={busy || f.ordini.every((x) => rilasci[x.id])} onClick={() => rilascia([f])}>{f.ordini.every((x) => rilasci[x.id]) ? '✔ Rilasciato al magazzino' : '📤 Rilascia al magazzino'}</button></Etichetta> <Etichetta chiave="stampaFoglio"><button className="sec" onClick={() => stampaFoglio(f.cliente)}>{f.ordini.some((x) => modificato(x)) ? '🖨 Stampa il foglio aggiornato' : '🖨 Stampa questo foglio'}</button></Etichetta></span>
           </div>
           {f.ordini.map((o) => {
             const [classe, etichetta] = STATO[o.stato] || ['', o.stato];
@@ -371,7 +534,7 @@ export default function Picking() {
                   <Spiega titolo={etichetta} testo={SPIEGA_STATO[o.stato] || ''}><span className={`chk ${classe}`}>{etichetta}</span></Spiega>
                 </div>
                 <table className="picking">
-                  <thead><tr><Th nome="Articolo" /><Th nome="Lotto" /><Th nome="Scadenza" /><Th nome="Ubicazione" /><Th nome="Giacenza" /><Th nome="Q.tà" /><Th nome="Preparato / differenze" className="diff" /></tr></thead>
+                  <thead><tr><Th nome="Articolo" /><Th nome="Descrizione" /><Th nome="Lotto" /><Th nome="Scadenza" /><Th nome="Ubicazione" /><Th nome="Q.tà" /><Th nome="Giacenza" className="noprint" /><Th nome="Preparato / differenze" className="diff" /></tr></thead>
                   <tbody>
                     {(() => {
                       const righe = righeDi(o);
@@ -380,7 +543,7 @@ export default function Picking() {
                       return articoli.map((art) => {
                         const figli = righe.map((r, i) => ({ r, i })).filter(({ r }) => r.articolo === art);
                         const somma = sommaArt(righe, art);
-                        const ordinato = o.ordinati.get(art) ?? somma;
+                        const ordinato = richiesto(o, art) ?? somma;
                         const multi = figli.length > 1;
                         const descrizione = o.descrizioni.get(art);
                         const usati = new Set(figli.map(({ r }) => r.lotto));
@@ -389,15 +552,16 @@ export default function Picking() {
                         return (
                           <Fragment key={art}>
                             <tr className={`madre${multi ? ' multi' : ''}${eccede ? ' errore' : ''}`}>
-                              <td><div className="art"><Riquadro articolo={art} /><div><b>{art}</b>{descrizione && descrizione !== art ? <div className="muted small">{descrizione}</div> : null}</div></div></td>
+                              <td><div className="art"><Riquadro articolo={art} /><b>{art}</b></div></td>
+                              <td className="desc">{descrizione && descrizione !== art ? descrizione : '—'}</td>
                               <td>
                                 <Spiega titolo={`Lotti di ${art}`} testo={`In uso in questo ordine: ${figli.map(({ r }) => r.lotto || '(senza lotto)').join(', ')}. Disponibili in magazzino (${disponibili.length}): ${disponibili.map((g) => `${g.lotto} (${g.disponibile}, scade ${fmtData(g.scadenza)})`).join('; ') || 'nessuno'}.`}>
                                   <span className={`chk lotti-tag${multi ? ' warn' : ''}`}>{figli.length} {figli.length === 1 ? 'lotto usato' : 'lotti usati'} su {disponibili.length}</span>
                                 </Spiega>
                               </td>
                               <td></td><td></td>
-                              <td><span className="small muted">tot. {giacenzaTotale(art)}</span></td>
                               <td><b>{somma}</b>{Math.abs(somma - ordinato) > 1e-9 ? <span className={`small ${somma < ordinato ? 'manca' : 'eccesso'}`}> / {ordinato}</span> : null}</td>
+                              <td className="noprint"><span className="small muted" title="Somma di tutti i lotti dell'articolo, non solo quelli usati in questo ordine">totale articolo (tutti i lotti): <b>{giacenzaTotale(art)}</b></span></td>
                               <td className="diff"></td>
                             </tr>
                             {figli.map(({ r, i }, k) => {
@@ -410,6 +574,7 @@ export default function Picking() {
                               return (
                                 <tr key={i} className={`figlia${multi ? ' multi' : ''}${errore ? ' errore' : ''}`}>
                                   <td className="ramo"><span>{k < figli.length - 1 ? '├─' : '└─'}</span></td>
+                                  <td></td>
                                   <td>{modifica ? (
                                     <>
                                       <select className="noprint" value={r.lotto || ''} onChange={(e) => scegliLotto(o, i, e.target.value)}>
@@ -422,7 +587,6 @@ export default function Picking() {
                                   {prima && <div className="fefo noprint">⚠ salti {prima.lotto}, che scade prima ({fmtData(prima.scadenza)})</div>}</td>
                                   <td className={giorni != null && giorni <= 30 ? 'scade' : ''} title={giorni != null && giorni <= 30 ? `Scade tra ${giorni} giorni` : ''}>{r.scadenza ? fmtData(r.scadenza) : '—'}{giorni != null && giorni <= 30 ? <div className="small">tra {giorni} g</div> : null}</td>
                                   <td>{r.ubicazione || '—'}</td>
-                                  <td><span className={`small ${errore ? 'eccesso' : 'muted'}`}>{gl}</span>{lib < gl ? <div className="small manca noprint" title="Altri ordini di questo foglio stanno già usando parte di questo lotto">per questo ordine ne restano {lib} (gli altri {tondo(gl - lib)} servono ad altri ordini)</div> : null}</td>
                                   <td>{modifica ? (
                                     <>
                                       <span className="qmod noprint">
@@ -432,13 +596,14 @@ export default function Picking() {
                                       <b className="solo-stampa">{r.quantita}</b>
                                     </>
                                   ) : <b>{r.quantita}</b>}</td>
+                                  <td className="noprint"><span className={`small ${errore ? 'eccesso' : 'muted'}`}>{gl}</span>{lib < gl ? <div className="small manca noprint" title="Altri ordini di questo foglio stanno già usando parte di questo lotto">per questo ordine ne restano {lib} (gli altri {tondo(gl - lib)} servono ad altri ordini)</div> : null}</td>
                                   <td className="diff"></td>
                                 </tr>
                               );
                             })}
                             {modifica && (
                               <tr className="aggiungi noprint">
-                                <td colSpan={7}>
+                                <td colSpan={8}>
                                   <Etichetta chiave="piu"><button className="sec" onClick={() => aggiungiLotto(o, art, ordinato)}>+ aggiungi un altro lotto{somma < ordinato ? ` (mancano ${tondo(ordinato - somma)})` : ''}</button></Etichetta>
                                 </td>
                               </tr>
@@ -451,11 +616,12 @@ export default function Picking() {
                 </table>
                 {o.idGiobby && o.prelievi.length > 0 && !ddtFatti[o.id]?.ok && (
                   <div className="passi noprint">
-                    {!stampati.has(f.cliente) ? (
-                      <p className="muted small"><b>Passo 1.</b> Stampa il foglio (pulsante «Stampa questo foglio» in alto) e daglielo all'operatore. Dopo la preparazione potrai confermare il DDT.</p>
+                    {!(stampati.has(f.cliente) || rilasci[o.id]) ? (
+                      <p className="muted small"><b>Passo 1.</b> Premi «Rilascia al magazzino» (il magazziniere lo vede nella pagina Magazzino e lo stampa) oppure stampa qui il foglio. Dopo la preparazione potrai confermare il DDT.</p>
                     ) : riepilogo === o.id ? pannelloRiepilogo(o) : (
                       <>
-                        <p className="small"><b>Passo 2.</b> Foglio stampato. L'operatore ha preparato la merce: come è andata?</p>
+                        <p className="small"><b>Passo 2.</b> {rilasci[o.id]?.stato === 'preparato' ? 'Il magazzino ha segnato l\'ordine come preparato.' : 'Foglio pronto.'} L'operatore ha preparato la merce: come è andata?</p>
+                        {rilasci[o.id]?.nota ? <div className="info">Nota del magazziniere: {rilasci[o.id].nota}</div> : null}
                         {problemi(o).length > 0 && <div className="err"><b>Non si può creare il DDT:</b><ul>{problemi(o).map((m, k) => <li key={k}>{m}</li>)}</ul></div>}
                         <div className="actions">
                           {!inModifica.has(o.id) ? (

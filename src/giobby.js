@@ -5,7 +5,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { config } from './config.js';
 import { catalogo, conCodiciGiobby, righeDaScegliere, risolviArticoli } from './articoli.js';
-import { adattaEntrataMerci, calcolaResiduo, corpoOrdineResiduo, corpoOrdineVendita, corpoPerAggiornamento, righeOrdineSpezzate, umDecimale, dataGiobby, giacenzeDaReport, numeroOrdine, oggiIso, ordineVenditaPerPicking, ricevutoPerOrdine } from './giobbyCarico.js';
+import { adattaEntrataMerci, calcolaResiduo, corpoOrdineResiduo, corpoOrdineVendita, corpoPerAggiornamento, righeOrdineSpezzate, umDecimale, dataGiobby, giacenzeDaReport, numeroOrdine, oggiIso, isoDaGiobby, ordineVenditaPerPicking, provinciaDa, ricevutoPerOrdine, rigaEvasa } from './giobbyCarico.js';
 import { GiobbyError, GiobbyHttp } from './giobbyHttp.js';
 
 // Giacenze di prova (stessi articoli del sandbox Giobby) per vedere il picking senza collegamento a Giobby.
@@ -18,9 +18,9 @@ const GIACENZE_PROVA = [
 
 // Ordini di vendita di prova (stessi dell'esempio della pagina Picking).
 const ORDINI_PROVA = [
-  { id: 'OV-101', idGiobby: null, cliente: 'Panificio Rossi', stato: 'Creato', consegna: '2026-10-15', righe: [{ articolo: 'FAR-002', descrizione: 'Farina di mais 1 kg', quantita: 50 }, { articolo: 'FAR-003', descrizione: 'Semola 1 kg', quantita: 10 }] },
-  { id: 'OV-102', idGiobby: null, cliente: 'Pasta Bianchi', stato: 'Creato', consegna: '2026-10-14', righe: [{ articolo: 'FAR-002', descrizione: 'Farina di mais 1 kg', quantita: 30 }, { articolo: 'FAR-001', descrizione: 'Farina 00 1 kg', quantita: 5 }] },
-  { id: 'OV-103', idGiobby: null, cliente: 'Panificio Rossi', stato: 'Creato', consegna: '2026-10-16', righe: [{ articolo: 'FAR-003', descrizione: 'Semola 1 kg', quantita: 5 }] },
+  { id: 'OV-101', idGiobby: null, cliente: 'Panificio Rossi', provincia: 'BS', stato: 'Creato', consegna: '2026-10-15', righe: [{ articolo: 'FAR-002', descrizione: 'Farina di mais 1 kg', quantita: 50 }, { articolo: 'FAR-003', descrizione: 'Semola 1 kg', quantita: 10 }] },
+  { id: 'OV-102', idGiobby: null, cliente: 'Pasta Bianchi', provincia: 'BG', stato: 'Creato', consegna: '2026-10-14', righe: [{ articolo: 'FAR-002', descrizione: 'Farina di mais 1 kg', quantita: 30 }, { articolo: 'FAR-001', descrizione: 'Farina 00 1 kg', quantita: 5 }] },
+  { id: 'OV-103', idGiobby: null, cliente: 'Panificio Rossi', provincia: 'BS', stato: 'Creato', consegna: '2026-10-16', righe: [{ articolo: 'FAR-003', descrizione: 'Semola 1 kg', quantita: 5 }] },
 ];
 
 class DryRunGiobby {
@@ -33,6 +33,12 @@ class DryRunGiobby {
     return { idDdt: null, riferimento: `DDT di uscita SIMULATO (ordine ${idGiobby}): nulla è stato scritto in Giobby`, statoOrdine: null, avvisi: [] };
   }
   async pdfDdtUscita() { throw new Error('Il PDF del DDT si scarica solo con il collegamento a Giobby (GIOBBY_MODE=api)'); }
+  async ordiniEvasi() {
+    return [
+      { id: 'OV-090', idGiobby: null, cliente: 'Panificio Rossi', provincia: 'BS', stato: 'Merce spedita', data: '2026-10-12' },
+      { id: 'OV-091', idGiobby: null, cliente: 'Pasta Bianchi', provincia: 'BG', stato: 'Merce spedita', data: '2026-10-13' },
+    ];
+  }
   async ordiniVendita() { return ORDINI_PROVA.map((o) => ({ ...o, righe: o.righe.map((r) => ({ ...r })) })); }
   async registraCarico(ddt, { chiave } = {}) {
     const ref = `DRY-${new Date().toISOString().replace(/\D/g, '')}-${Math.random().toString(36).slice(2, 6)}`;
@@ -108,12 +114,37 @@ export class ApiGiobby {
    * Ordini di vendita da evadere, pronti per il picking. L'elenco di Giobby non ha le righe: si legge il dettaglio di ogni ordine aperto.
    * Ordinati per data di consegna (poi per numero). Attenzione: di un ordine già evaso in parte si legge la quantità ordinata intera.
    */
+  /** Ordini di vendita già usciti (non più aperti): solo l'elenco di Giobby, senza dettaglio (veloce). Ultimi 100. */
+  async ordiniEvasi() {
+    const chiusi = (await this.#elenco('/sales/orders', 'documentsHeaders')).filter((o) => !venditaAperta(o.docStatus));
+    return chiusi.sort((a, b) => Number(b.id) - Number(a.id)).slice(0, 100).map((o) => ({
+      id: `ODV ${String(o.docNumber ?? o.id).trim()}`, idGiobby: o.id, cliente: o.companyName || o.idCustomer || null, provincia: provinciaDa(o),
+      stato: o.docStatusDesc || o.docStatus || null, data: o.docDate ? isoDaGiobby(Number(o.docDate)) : null,
+    }));
+  }
+
+  #province = new Map();
+  /** Provincia dell'anagrafica cliente (se Giobby la espone); un solo tentativo per cliente, mai bloccante. */
+  async #provinciaCliente(idCliente) {
+    const k = String(idCliente);
+    if (!this.#province.has(k)) {
+      let p = null;
+      try {
+        const r = await this.http.get(`/customers/${encodeURIComponent(k)}`);
+        p = provinciaDa(r?.customer ?? r?.document ?? r);
+      } catch { /* provincia non disponibile: la colonna resta vuota */ }
+      this.#province.set(k, p);
+    }
+    return this.#province.get(k);
+  }
+
   async ordiniVendita() {
     const aperti = (await this.#elenco('/sales/orders', 'documentsHeaders')).filter((o) => venditaAperta(o.docStatus));
     const ordini = [];
     for (const o of aperti) {
       const { document } = await this.http.get(`/sales/${o.id}/orders`);
       const ordine = ordineVenditaPerPicking(document);
+      if (!ordine.provincia && ordine.idCliente) ordine.provincia = await this.#provinciaCliente(ordine.idCliente);
       if (ordine.righe.length) ordini.push(ordine);
     }
     return ordini.sort((a, b) => String(a.consegna ?? '9999').localeCompare(String(b.consegna ?? '9999')) || Number(a.idGiobby) - Number(b.idGiobby));
@@ -133,7 +164,7 @@ export class ApiGiobby {
     for (const p of validi) if (p.lotto && !p.scadenza) throw new Error(`${p.articolo}: il lotto ${p.lotto} non ha la scadenza`);
 
     const { document: originale } = await this.http.get(`/sales/${id}/orders`);
-    if (originale.docStatus !== 'CREATED') throw new Error(`L'ordine ${originale.docDescription} è "${originale.docStatusDesc}": il DDT si emette solo per un ordine "Creato"`);
+    if (originale.docStatus !== 'CREATED' && !/PARTIAL/i.test(String(originale.docStatus))) throw new Error(`L'ordine ${originale.docDescription} è "${originale.docStatusDesc}": il DDT si emette solo per un ordine "Creato" o già spedito in parte`);
     await this.#controllaPrelievi(originale, validi, { parziale });
     const righeOrdine = righeOrdineSpezzate(originale.rows, validi); // errore qui = ancora nulla scritto
 
@@ -173,7 +204,7 @@ export class ApiGiobby {
   /** Paletti prima di scrivere in Giobby: solo articoli dell'ordine, quantità valide, lotti esistenti non scaduti e con giacenza (riletta ora). */
   async #controllaPrelievi(ordine, prelievi, { parziale }) {
     const n = (x) => String(x ?? '').trim().toUpperCase();
-    const merce = ordine.rows.filter((r) => Number(r.idPosType) === 1 && r.idMaterial);
+    const merce = ordine.rows.filter((r) => Number(r.idPosType) === 1 && r.idMaterial && !rigaEvasa(r));
     const ordinato = new Map();
     for (const r of merce) {
       const o = ordinato.get(n(r.idMaterial)) ?? { quantita: 0, um: r.um };

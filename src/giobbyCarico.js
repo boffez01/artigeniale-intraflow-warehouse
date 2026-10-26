@@ -211,14 +211,27 @@ export function giacenzeDaReport(report = [], lotti = []) {
  * { id:'ODV 1', idGiobby, cliente, stato, consegna:'AAAA-MM-GG', righe:[{articolo, descrizione, quantita}] }.
  * La consegna è la più vicina tra le righe; contano solo le righe merce (idPosType 1) con quantità > 0.
  */
+/** Provincia da un documento/anagrafica Giobby: primo campo il cui nome contiene "prov" (es. province, shipToProvince) con un valore testuale. */
+export function provinciaDa(oggetto) {
+  for (const [k, v] of Object.entries(oggetto ?? {})) {
+    if (/prov/i.test(k) && typeof v === 'string' && v.trim() && v.trim().length <= 40) return v.trim().toUpperCase();
+  }
+  return null;
+}
+
+/** Riga d'ordine già consegnata (DDT emesso): non è più da evadere. Una riga «parzialmente» consegnata resta aperta. */
+export const rigaEvasa = (r) => /DELIVER/i.test(String(r?.docposstatus ?? '')) && !/PARTIAL/i.test(String(r?.docposstatus ?? ''));
+
 export function ordineVenditaPerPicking(doc) {
-  const righe = (doc?.rows ?? []).filter((r) => Number(r.idPosType) === 1 && Number(r.quantity) > 0 && r.idMaterial);
+  const righe = (doc?.rows ?? []).filter((r) => Number(r.idPosType) === 1 && Number(r.quantity) > 0 && r.idMaterial && !rigaEvasa(r));
   const consegne = righe.map((r) => Number(r.deliveryDate)).filter((n) => Number.isFinite(n) && n > 0);
   return {
     id: `ODV ${String(doc.docNumber ?? doc.id).trim()}`,
     idGiobby: doc.id,
     cliente: doc.companyName || doc.idCustomer || null,
     stato: doc.docStatusDesc || doc.docStatus || null,
+    idCliente: doc.idCustomer ?? null,
+    provincia: provinciaDa(doc),
     consegna: consegne.length ? isoDaGiobby(Math.min(...consegne)) : null,
     righe: righe.map((r) => ({ articolo: norm(r.idMaterial), descrizione: String(r.description ?? '').trim() || null, quantita: arrotonda(Number(r.quantity)), um: String(r.um ?? '').trim().toUpperCase() || null })),
   };
@@ -246,7 +259,7 @@ export function corpoOrdineVendita(ordine, righe) {
 export function righeOrdineSpezzate(righeOrdine, prelievi) {
   const out = [];
   for (const r of righeOrdine) {
-    if (r.idPosType !== 1 || !r.idMaterial) { out.push({ ...r }); continue; }
+    if (r.idPosType !== 1 || !r.idMaterial || rigaEvasa(r)) { out.push({ ...r }); continue; } // testo libero o riga già consegnata: invariata
     const lotti = prelievi.filter((p) => String(p.articolo).trim().toUpperCase() === String(r.idMaterial).trim().toUpperCase() && Number(p.quantita) > 0);
     if (!lotti.length) { out.push({ ...r }); continue; }
     const totale = lotti.reduce((t, p) => t + Number(p.quantita), 0);

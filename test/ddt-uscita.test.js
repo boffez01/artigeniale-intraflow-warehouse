@@ -113,3 +113,15 @@ test('unità: pezzi solo interi, kg anche decimali', async () => {
   assert.equal(umDecimale('PZ'), false);
   assert.equal(umDecimale(null), true);
 });
+
+test('ordine già spedito in parte: le righe consegnate non sono più da evadere né si spezzano', async () => {
+  const { ordineVenditaPerPicking, righeOrdineSpezzate } = await import('../src/giobbyCarico.js');
+  const doc = { id: 7, docNumber: '7', rows: [
+    { idPos: 1, idPosType: 1, idMaterial: 'FAR-002', quantity: 30, docposstatus: 'GOOD_DELIVERY', idLot: 'L1' },
+    { idPos: 2, idPosType: 1, idMaterial: 'FAR-002', quantity: 20, docposstatus: 'CREATED' },
+    { idPos: 3, idPosType: 1, idMaterial: 'FAR-003', quantity: 10, docposstatus: 'GOOD_PARTIAL_DELIVERY' },
+  ] };
+  assert.deepEqual(ordineVenditaPerPicking(doc).righe.map((r) => [r.articolo, r.quantita]), [['FAR-002', 20], ['FAR-003', 10]]);
+  const out = righeOrdineSpezzate(doc.rows, [{ articolo: 'FAR-002', lotto: 'L2', quantita: 20 }]);
+  assert.deepEqual(out.map((r) => [r.quantity, r.docposstatus]), [[30, 'GOOD_DELIVERY'], [20, 'CREATED'], [10, 'GOOD_PARTIAL_DELIVERY']]);
+});

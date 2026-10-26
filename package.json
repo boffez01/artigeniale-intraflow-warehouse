@@ -10,6 +10,7 @@
     "dev": "node --watch src/server.js",
     "dev:client": "npm --prefix client run dev",
     "watcher": "node src/watcher.js",
+    "utente": "node scripts/utente.js",
     "giobby:test": "node scripts/giobby-test.js",
     "test": "node scripts/run-tests.js"
   },

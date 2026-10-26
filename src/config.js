@@ -27,6 +27,9 @@ export const config = {
   giobbyPassword: process.env.GIOBBY_PASSWORD || '',
   // Interruttore del Modulo B (picking): off = non si vede e le sue API rispondono 404; on = attivo
   moduloB: ['on', 'true', '1', 'si'].includes(String(process.env.MODULO_B || '').trim().toLowerCase()),
+  // Login obbligatorio (AUTH=on, predefinito). AUTH=off solo per prove in locale o per i test.
+  auth: !['off', 'false', '0', 'no'].includes(String(process.env.AUTH || 'on').trim().toLowerCase()),
+  sessioneOre: Number(process.env.SESSIONE_ORE || 12),
   giobbyStorage: process.env.GIOBBY_STORAGE || 'MB', // magazzino di carico
   giobbyBaseUrl: (process.env.GIOBBY_BASE_URL || '').replace(/\/+$/, ''), // facoltativo: forza l'indirizzo delle API
 };
